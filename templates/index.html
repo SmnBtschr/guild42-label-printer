@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Name Badge Printer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.card { background: white; border-radius: 16px; padding: 2rem; max-width: 420px; width: 100%; box-shadow: 0 2px 20px rgba(0,0,0,0.08); }
+.logo { font-size: 12px; font-weight: 600; color: #888; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+h1 { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 1.5rem; }
+label.field-label { font-size: 13px; color: #666; display: block; margin-bottom: 6px; }
+input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 16px; margin-bottom: 1.5rem; outline: none; transition: border-color 0.2s; }
+input[type=text]:focus { border-color: #1a1a2e; }
+.preview { background: white; border: 1.5px solid #e0e0e0; border-radius: 8px; padding: 1.5rem; text-align: center; margin: 1rem 0; position: relative; overflow: hidden; min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.preview-stripe { position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #1a1a2e; }
+.preview-name { font-size: 28px; font-weight: 700; color: #1a1a2e; }
+.preview-sub { font-size: 14px; color: #666; margin-top: 4px; }
+.preview-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
+button.print-btn { width: 100%; padding: 14px; background: #1a1a2e; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 0.5rem; transition: opacity 0.2s; }
+button.print-btn:hover { opacity: 0.85; }
+button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.status { text-align: center; font-size: 14px; margin-top: 1rem; min-height: 20px; }
+.ok { color: #0a7c4e; }
+.err { color: #c0392b; }
+.admin-toggle { margin-top: 2rem; text-align: center; }
+.admin-toggle button { background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 4px 8px; }
+.admin-toggle button:hover { color: #999; }
+.admin-panel { display: none; margin-top: 1rem; padding: 1rem; background: #f9f9f9; border: 1.5px dashed #ddd; border-radius: 8px; }
+.admin-panel.open { display: block; }
+.admin-panel p { font-size: 12px; color: #888; margin-bottom: 10px; }
+.radio-group { display: flex; flex-direction: column; gap: 8px; }
+.radio-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1.5px solid #e0e0e0; border-radius: 8px; cursor: pointer; background: white; transition: border-color 0.2s; }
+.radio-option:hover { border-color: #1a1a2e; }
+.radio-option.selected { border-color: #1a1a2e; background: #f0f0f5; }
+.radio-option input[type=radio] { accent-color: #1a1a2e; width: 16px; height: 16px; cursor: pointer; }
+.radio-option span { font-size: 14px; font-weight: 500; color: #1a1a2e; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Name Badge Printer</div>
+  <h1>Print your name badge</h1>
+
+  <label class="field-label">Your first name</label>
+  <input type="text" id="inp-name" placeholder="e.g. Martina" maxlength="40" oninput="updatePreview()" />
+
+  <p class="preview-hint">Preview</p>
+  <div class="preview">
+    <div class="preview-stripe"></div>
+    <div class="preview-name" id="prev-name">Your name</div>
+    <div class="preview-sub" id="prev-sub">{{ default_subtitle }}</div>
+  </div>
+
+  <button class="print-btn" id="btn" onclick="doPrint()">🖨️ Print badge</button>
+  <div class="status" id="status"></div>
+
+  <div class="admin-toggle">
+    <button onclick="toggleAdmin()">⚙</button>
+  </div>
+  <div class="admin-panel" id="admin-panel">
+    <p>Select event label for this session:</p>
+    <div class="radio-group">
+      {% for s in subtitles %}
+      <label class="radio-option {% if s == default_subtitle %}selected{% endif %}">
+        <input type="radio" name="subtitle" value="{{ s }}"
+          {% if s == default_subtitle %}checked{% endif %}
+          onchange="updatePreview(); updateSelected(this)" />
+        <span>{{ s }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleAdmin() {
+  document.getElementById('admin-panel').classList.toggle('open');
+}
+function updateSelected(radio) {
+  document.querySelectorAll('.radio-option').forEach(el => el.classList.remove('selected'));
+  radio.closest('.radio-option').classList.add('selected');
+}
+function getSubtitle() {
+  const checked = document.querySelector('input[name="subtitle"]:checked');
+  return checked ? checked.value : '{{ default_subtitle }}';
+}
+function updatePreview() {
+  const name = document.getElementById('inp-name').value.trim();
+  document.getElementById('prev-name').textContent = name || 'Your name';
+  document.getElementById('prev-sub').textContent = getSubtitle();
+}
+async function doPrint() {
+  const name = document.getElementById('inp-name').value.trim();
+  const subtitle = getSubtitle();
+  const btn = document.getElementById('btn');
+  const st = document.getElementById('status');
+  if (!name) { st.className = 'status err'; st.textContent = 'Please enter your first name.'; return; }
+  btn.disabled = true;
+  st.className = 'status';
+  st.textContent = 'Printing…';
+  try {
+    const res = await fetch('/print', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, subtitle })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      st.className = 'status ok';
+      st.textContent = '✓ Your badge is printing!';
+      document.getElementById('inp-name').value = '';
+      updatePreview();
+    } else {
+      st.className = 'status err';
+      st.textContent = data.error || 'Print error.';
+    }
+  } catch(e) {
+    st.className = 'status err';
+    st.textContent = 'Server not reachable.';
+  }
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>

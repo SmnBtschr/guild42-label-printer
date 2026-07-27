@@ -1,0 +1,14 @@
+[Unit]
+Description=Guild42 Name Badge Printer
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/home/guild42/nametag
+ExecStartPre=/usr/local/bin/brother-setup.sh
+ExecStart=/usr/bin/python3 /home/guild42/nametag/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

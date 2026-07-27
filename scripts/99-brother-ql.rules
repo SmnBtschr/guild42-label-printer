@@ -1,0 +1,3 @@
+# /etc/udev/rules.d/99-brother-ql.rules
+# Grant access to the Brother QL-820NWBc USB device for the lp group.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="04f9", ATTRS{idProduct}=="209d", MODE="0664", GROUP="lp"
