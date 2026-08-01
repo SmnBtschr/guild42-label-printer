@@ -1,9 +1,11 @@
 # Guild42 Self-Service Name Badge Printer
 
 A self-service name badge printing station for community events.  
-Attendees scan a QR code, enter their first name, and a label prints in seconds.
+Attendees scan a QR code, enter their first name, and a label prints in seconds — from any mobile network.
 
-Runs on a Raspberry Pi with a Brother QL-820NWBc label printer connected via USB.  
+Runs on a Raspberry Pi with a Brother QL-820NWBc label printer connected via USB,  
+accessible publicly via Cloudflare Tunnel at `https://printer.guild42.ch`.
+
 Hardware kindly provided by [Zooey.ch](https://zooey.ch).
 
 ---
@@ -11,11 +13,13 @@ Hardware kindly provided by [Zooey.ch](https://zooey.ch).
 ## Features
 
 - Mobile-friendly web UI — no app to install, just scan a QR code
+- Accessible from **any network** via `https://printer.guild42.ch` (Cloudflare Tunnel)
 - Live label preview before printing
 - Multi-event support: Guild42.ch, CH-Open.ch, Workshop-Tage.ch
 - Default event configurable via a single `.env` file
 - Hidden admin panel (⚙) for on-the-fly event switching
-- Runs fully offline — no cloud, no external dependencies
+- Automatic WiFi failover: iPhone hotspot (event) → home network (development)
+- Fully self-managing: auto-start on boot, auto-restart on crash
 
 ---
 
@@ -30,11 +34,29 @@ Hardware kindly provided by [Zooey.ch](https://zooey.ch).
 
 ---
 
-## Software Requirements
+## How it works
 
-- Raspberry Pi OS Lite 64-bit (Bookworm)
-- Python 3.11+
-- See `requirements.txt` for Python dependencies
+```
+Attendee scans QR code
+    │
+    ▼
+https://printer.guild42.ch
+    │
+    ▼
+Cloudflare Edge (TLS termination)
+    │  QUIC tunnel
+    ▼
+Raspberry Pi — Flask app (:5000)
+    │
+    ▼
+Pillow renders label image
+    │
+    ▼
+brother_ql → /dev/usb/lp0
+    │
+    ▼
+Brother QL-820NWBc prints label
+```
 
 ---
 
@@ -44,7 +66,7 @@ Hardware kindly provided by [Zooey.ch](https://zooey.ch).
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install python3-pip python3-pil libusb-1.0-0 imagemagick -y
+sudo apt install python3-pip python3-pil libusb-1.0-0 imagemagick qrencode -y
 
 # 32-bit ARM compatibility (required for Brother binary filter)
 sudo dpkg --add-architecture armhf
@@ -60,7 +82,7 @@ pip3 install flask brother_ql Pillow --break-system-packages
 
 ### 3. Install Brother printer driver
 
-Download the ARM driver from Brother's support site:  
+Download the ARM driver from Brother's support site:
 `ql820nwbpdrv-2.1.4-0.armhf.deb`
 
 ```bash
@@ -89,16 +111,8 @@ open('/opt/brother/PTouch/ql820nwb/lpd/filter_ql820nwb', 'w').write(content)
 ### 4. Configure USB kernel module
 
 ```bash
-# Load usblp on boot
 echo 'usblp' | sudo tee /etc/modules-load.d/usblp.conf
-
-# Disable ipp-usb (it conflicts with direct USB access)
 sudo systemctl disable ipp-usb 2>/dev/null || true
-```
-
-Install udev rule:
-
-```bash
 sudo cp scripts/99-brother-ql.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 ```
@@ -110,37 +124,65 @@ mkdir -p ~/nametag
 cp app.py ~/nametag/
 cp -r templates ~/nametag/
 cp .env.example ~/nametag/.env
-# Edit .env to set DEFAULT_SUBTITLE if needed
 ```
 
-### 6. Install the setup script and systemd service
+### 6. Install setup script and systemd service
 
 ```bash
 sudo cp scripts/brother-setup.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/brother-setup.sh
-
 sudo cp scripts/nametag.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable nametag
 sudo systemctl start nametag
 ```
 
-### 7. Generate the QR code
-
-Replace the IP with your Pi's actual IP address:
+### 7. Install Cloudflare Tunnel
 
 ```bash
-sudo apt install qrencode -y
-qrencode -o ~/nametag-qr.png -s 10 "http://192.168.178.179:5000"
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 \
+  -o cloudflared
+sudo mv cloudflared /usr/local/bin/
+sudo chmod +x /usr/local/bin/cloudflared
+
+cloudflared tunnel login
+cloudflared tunnel create guild42-badges
 ```
 
-Print the QR code and place it at the check-in desk.
+Configure and install as service:
+
+```bash
+mkdir -p ~/.cloudflared
+# Create config.yml — see Cloudflare docs for details
+sudo cloudflared service install
+sudo systemctl enable cloudflared
+sudo systemctl start cloudflared
+```
+
+### 8. Configure WiFi failover
+
+```bash
+# Add event hotspot with high priority
+sudo nmcli dev wifi connect 'YOUR-HOTSPOT-SSID' password 'YOUR-PASSWORD'
+sudo nmcli con modify 'YOUR-HOTSPOT-SSID' connection.autoconnect-priority 50
+sudo nmcli con modify 'YOUR-HOTSPOT-SSID' connection.autoconnect yes
+
+# Set home network to lower priority
+sudo nmcli con modify 'YOUR-HOME-SSID' connection.autoconnect-priority 10
+sudo nmcli con modify 'YOUR-HOME-SSID' connection.autoconnect yes
+```
+
+### 9. Generate the QR code
+
+```bash
+qrencode -o ~/nametag-qr.png -s 10 "https://printer.guild42.ch"
+```
+
+Print this once — the URL never changes.
 
 ---
 
 ## Changing the Default Event
-
-Edit the `.env` file and restart the service:
 
 ```bash
 echo "DEFAULT_SUBTITLE=CH-Open.ch" > ~/nametag/.env
@@ -153,24 +195,23 @@ Available values: `Guild42.ch`, `CH-Open.ch`, `Workshop-Tage.ch`
 
 ## Troubleshooting
 
-**`/dev/usb/lp0` not found after reboot**  
-Run the setup script manually:
+**`/dev/usb/lp0` not found after reboot**
 ```bash
 sudo /usr/local/bin/brother-setup.sh
 ```
 
-**Print job accepted but nothing prints**  
-Check the service log:
+**Print job accepted but nothing prints**
 ```bash
 sudo journalctl -u nametag --no-pager -n 30
 ```
 
-**Wrong roll type error on printer display**  
-- Ensure a genuine DK-22205 roll is inserted (sample rolls may not be recognised)
-- Power cycle the printer and restart ipp-usb:
-  ```bash
-  sudo systemctl restart nametag
-  ```
+**Tunnel not reachable**
+```bash
+sudo journalctl -u cloudflared --no-pager -n 20
+```
+
+**Wrong roll type on printer display**  
+Use genuine DK-22205 rolls only — sample rolls may not be recognised.
 
 ---
 
@@ -178,3 +219,4 @@ sudo journalctl -u nametag --no-pager -n 30
 
 - Hardware: [Zooey.ch](https://zooey.ch)
 - Community: [Guild42.ch](https://guild42.ch)
+- Live at: [printer.guild42.ch](https://printer.guild42.ch)

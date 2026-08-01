@@ -3,7 +3,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Active |
 | Author | Guild42.ch |
 | Hardware Sponsor | Zooey.ch |
@@ -17,22 +17,24 @@
 
 The Guild42 Self-Service Name Badge Printer allows event attendees to print personalised name badges without staff assistance. Attendees scan a QR code at the check-in desk, open a web page on their mobile phone, enter their first name, and receive a printed label within seconds.
 
-The system must:
+The system must: 
 
 - Be operable by any attendee without instructions
 - Print a legible 62mm label within 5 seconds of submission
 - Survive a full event (several hours) without manual intervention
 - Support multiple event brands (Guild42.ch, CH-Open.ch, Workshop-Tage.ch)
 - Allow the active event to be switched by an operator with a single command
+- Be accessible from any mobile network via a public HTTPS URL
 
 ### 1.2 Quality Goals
 
 | Priority | Quality Goal | Scenario |
 |----------|-------------|----------|
 | 1 | Reliability | The system prints every submitted job without operator intervention during an event |
-| 2 | Operability | An operator can switch the active event brand via SSH in under 30 seconds |
-| 3 | Simplicity | An attendee with no prior instructions can print a badge within 60 seconds of scanning the QR code |
-| 4 | Portability | The system can be moved between venues and restarted without reconfiguration |
+| 2 | Accessibility | Attendees can print from their own mobile network — no shared WiFi required |
+| 3 | Operability | An operator can switch the active event brand via SSH in under 30 seconds |
+| 4 | Simplicity | An attendee with no prior instructions can print a badge within 60 seconds of scanning the QR code |
+| 5 | Portability | The system works at any venue by switching to iPhone hotspot automatically |
 
 ### 1.3 Stakeholders
 
@@ -54,7 +56,7 @@ The system must:
 | Raspberry Pi OS Bookworm 64-bit | Available hardware; 64-bit required for performance |
 | Brother QL-820NWBc via USB | Donated hardware; must use this specific printer model |
 | DK-22205 roll (62mm continuous) | Standard roll available for QL-820NWBc |
-| No internet at runtime | Event venues may have restricted or unreliable internet |
+| Public HTTPS access required | Attendees must access the system from their own mobile network |
 | Python ecosystem | Team familiarity; `brother_ql` library only available in Python |
 
 ### 2.2 Organisational Constraints
@@ -84,7 +86,7 @@ The system must:
 │                                                                  │
 │  ┌─────────────┐   scans QR code    ┌──────────────────────────┐ │
 │  │  Attendee   │ ─────────────────▶ │   Badge Printer System   │ │
-│  │  (mobile)   │ ◀───────────────── │   (Raspberry Pi)         │ │
+│  │  (any phone)│ ◀───────────────── │   (Raspberry Pi)         │ │
 │  └─────────────┘   badge prints     └──────────────────────────┘ │
 │                                                                  │
 │  ┌─────────────┐   SSH + .env edit  ┌──────────────────────────┐ │
@@ -96,42 +98,54 @@ The system must:
 
 | Neighbour | Communication | Direction |
 |-----------|-------------|-----------|
-| Attendee mobile browser | HTTP on port 5000 (local WiFi) | Bidirectional |
-| Operator laptop | SSH (local WiFi or direct cable) | Operator → System |
+| Attendee mobile browser | HTTPS via `printer.guild42.ch` (any network) | Bidirectional |
+| Operator laptop | SSH (local WiFi or hotspot) | Operator → System |
 | Brother QL-820NWBc | USB (usblp kernel driver) | System → Printer |
+| Cloudflare network | QUIC/HTTPS tunnel | Bidirectional |
 
 ### 3.2 Technical Context
 
 ```
+Internet (any network)
+        │
+        │ HTTPS  https://printer.guild42.ch
+        ▼
+┌───────────────────┐
+│  Cloudflare Edge  │
+│  (global CDN)     │
+└────────┬──────────┘
+         │ QUIC tunnel (outbound from Pi)
+         ▼
 ┌─────────────────────────────────────────────────────────┐
-│                     Local WiFi Network                  │
+│                  Local Network / Hotspot                │
 │                                                         │
-│   ┌──────────┐    HTTP :5000      ┌───────────────────┐ │
-│   │ Attendee │ ─────────────────▶ │  Raspberry Pi 4   │ │
-│   │  mobile  │ ◀───────────────── │  Flask app        │ │
-│   │  browser │                    │  /dev/usb/lp0     │ │
-│   └──────────┘                    └────────┬──────────┘ │
-│                                            │ USB        │
-└────────────────────────────────────────────┼────────────┘
-                                             │
-                                   ┌─────────▼──────────┐
-                                   │ Brother QL-820NWBc  │
-                                   │  DK-22205 62mm roll │
-                                   └────────────────────┘
+│   ┌───────────────────────────────────────────────┐     │
+│   │  Raspberry Pi 4  (guild42-printer.local)      │     │
+│   │                                               │     │
+│   │  cloudflared  ◀──▶  Flask :5000               │     │
+│   │                          │                   │     │
+│   │                    /dev/usb/lp0               │     │
+│   └──────────────────────────┬────────────────────┘     │
+└──────────────────────────────┼─────────────────────────┘
+                               │ USB
+                      ┌────────▼──────────┐
+                      │ Brother QL-820NWBc │
+                      │  DK-22205 62mm     │
+                      └───────────────────┘
 ```
 
 ---
 
 ## 4. Solution Strategy
 
-The system is intentionally minimal. Key strategic decisions:
-
 | Goal | Strategy |
 |------|----------|
-| Reliability | Bypass CUPS entirely; use `brother_ql` with `linux_kernel` backend directly to `/dev/usb/lp0` |
+| Reliability | Bypass CUPS; use `brother_ql` with `linux_kernel` backend directly to `/dev/usb/lp0` |
+| Public accessibility | Cloudflare Tunnel with fixed domain `printer.guild42.ch` — no port forwarding, no static IP |
+| Venue portability | Two WiFi profiles with priority: iPhone hotspot (priority 50) > home network (priority 10) |
 | Simplicity | Single Python file, no database, no framework beyond Flask |
 | Operability | File-based configuration (`.env`); systemd for auto-restart and boot start |
-| Zero attendee friction | No login, no app install, no account — QR code opens directly to print form |
+| Zero attendee friction | No login, no app install — QR code opens directly to print form over public HTTPS |
 | Multi-event support | Configurable subtitle per deployment via `.env`; session override via admin toggle |
 
 ---
@@ -141,23 +155,29 @@ The system is intentionally minimal. Key strategic decisions:
 ### 5.1 Level 1 — Overall System
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Badge Printer System                       │
-│                                                             │
-│  ┌──────────────┐   ┌──────────────┐   ┌────────────────┐  │
-│  │   Web UI     │   │  Flask App   │   │  Print Backend │  │
-│  │ (index.html) │──▶│  (app.py)    │──▶│ (brother_ql)   │  │
-│  └──────────────┘   └──────────────┘   └────────────────┘  │
-│                            │                               │
-│                   ┌────────▼────────┐                      │
-│                   │ Label Renderer  │                      │
-│                   │   (Pillow)      │                      │
-│                   └─────────────────┘                      │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      Badge Printer System                        │
+│                                                                  │
+│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────┐  │
+│  │  Cloudflare │   │   Web UI     │   │     Flask App        │  │
+│  │  Tunnel     │──▶│ (index.html) │──▶│     (app.py)         │  │
+│  │ (cloudflared│   └──────────────┘   └──────────┬───────────┘  │
+│  └─────────────┘                                 │              │
+│                                        ┌─────────▼───────────┐  │
+│                                        │   Label Renderer    │  │
+│                                        │   (Pillow)          │  │
+│                                        └─────────┬───────────┘  │
+│                                                  │              │
+│                                        ┌─────────▼───────────┐  │
+│                                        │   Print Backend     │  │
+│                                        │   (brother_ql)      │  │
+│                                        └─────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 | Building Block | Responsibility |
 |---------------|---------------|
+| Cloudflare Tunnel | Exposes local Flask app at `https://printer.guild42.ch` without port forwarding |
 | Web UI | Mobile-friendly form; live preview; admin event selector |
 | Flask App | HTTP routing; configuration reading; orchestration |
 | Label Renderer | Generates 696×271px PNG from name and subtitle |
@@ -185,36 +205,34 @@ The system is intentionally minimal. Key strategic decisions:
 
 ## 6. Runtime View
 
-### 6.1 Scenario: Attendee prints a badge
+### 6.1 Scenario: Attendee prints a badge (from any network)
 
 ```
-Attendee        Browser          Flask App        Label Renderer    Printer
+Attendee        Cloudflare       Flask App        Label Renderer    Printer
    │                │                │                  │               │
    │  scan QR       │                │                  │               │
-   │──────────────▶ │                │                  │               │
-   │                │  GET /         │                  │               │
+   │  (any network) │                │                  │               │
+   │───────────────▶│                │                  │               │
+   │                │ tunnel forward │                  │               │
    │                │───────────────▶│                  │               │
    │                │  200 HTML      │                  │               │
    │                │◀───────────────│                  │               │
+   │◀───────────────│                │                  │               │
    │  type name     │                │                  │               │
-   │──────────────▶ │                │                  │               │
-   │                │ (live preview update, JS only)     │               │
    │  tap Print     │                │                  │               │
-   │──────────────▶ │                │                  │               │
+   │───────────────▶│                │                  │               │
    │                │ POST /print    │                  │               │
-   │                │ {name,subtitle}│                  │               │
    │                │───────────────▶│                  │               │
    │                │                │ create_label_image│               │
    │                │                │─────────────────▶│               │
    │                │                │  PIL Image        │               │
    │                │                │◀─────────────────│               │
-   │                │                │  brother_ql convert+send          │
+   │                │                │  brother_ql send  │               │
    │                │                │──────────────────────────────────▶│
    │                │                │                  │   label prints │
    │                │  {ok: true}    │                  │               │
-   │                │◀───────────────│                  │               │
+   │◀───────────────│◀───────────────│                  │               │
    │  "✓ printing!" │                │                  │               │
-   │◀──────────────-│                │                  │               │
 ```
 
 ### 6.2 Scenario: Operator switches event brand
@@ -225,16 +243,11 @@ Operator (SSH)                    Raspberry Pi
       │  echo "DEFAULT_SUBTITLE=       │
       │    CH-Open.ch" > .env          │
       │───────────────────────────────▶│
-      │                                │
       │  sudo systemctl restart nametag│
       │───────────────────────────────▶│
-      │                                │ brother-setup.sh runs
       │                                │ Flask reloads .env
       │  service active                │
       │◀───────────────────────────────│
-      │                                │
-      │  next attendee sees            │
-      │  "CH-Open.ch" as default       │
 ```
 
 ### 6.3 Boot Sequence
@@ -242,19 +255,22 @@ Operator (SSH)                    Raspberry Pi
 ```
 Power on
     │
+    ├─▶ NetworkManager connects WiFi
+    │     ├── "STARLINK 🚀" hotspot available? → connect (priority 50)
+    │     └── fallback: "Happy LANding" home network (priority 10)
+    │
     ├─▶ systemd: load usblp module (modules-load.d/usblp.conf)
     │
     ├─▶ udev: set permissions on /dev/usb/lp0 (99-brother-ql.rules)
     │
+    ├─▶ systemd: start cloudflared.service
+    │     └── QUIC tunnel to Cloudflare → printer.guild42.ch active
+    │
     └─▶ systemd: start nametag.service
-          │
           ├─▶ ExecStartPre: brother-setup.sh
           │       ├── systemctl stop ipp-usb
-          │       ├── modprobe -r usblp
-          │       ├── sleep 2
-          │       ├── modprobe usblp
-          │       └── sleep 2  (wait for /dev/usb/lp0)
-          │
+          │       ├── modprobe -r usblp && modprobe usblp
+          │       └── wait for /dev/usb/lp0
           └─▶ ExecStart: python3 app.py
                   └── Flask listening on 0.0.0.0:5000
 ```
@@ -266,29 +282,39 @@ Power on
 ### 7.1 Infrastructure
 
 ```
+Internet
+    │
+    │  https://printer.guild42.ch
+    ▼
+┌──────────────────────┐
+│  Cloudflare Edge     │
+│  DNS + TLS + CDN     │
+└──────────┬───────────┘
+           │ QUIC tunnel (outbound)
+           ▼
 ┌──────────────────────────────────────────────────┐
 │  Raspberry Pi 4  (guild42-printer.local)          │
 │  Raspberry Pi OS Bookworm 64-bit                  │
 │                                                   │
-│  ┌────────────────────────────────────────────┐   │
-│  │  systemd service: nametag.service          │   │
-│  │  User: root                                │   │
-│  │  WorkingDir: /home/guild42/nametag/        │   │
-│  │                                            │   │
-│  │  /home/guild42/nametag/                    │   │
-│  │  ├── app.py                                │   │
-│  │  ├── .env                                  │   │
-│  │  └── templates/index.html                  │   │
-│  └────────────────────────────────────────────┘   │
+│  cloudflared.service  ──▶  :5000                  │
+│  nametag.service      ──▶  python3 app.py         │
+│                                                   │
+│  /home/guild42/nametag/                           │
+│  ├── app.py                                       │
+│  ├── .env                                         │
+│  └── templates/index.html                         │
 │                                                   │
 │  /usr/local/bin/brother-setup.sh                  │
 │  /etc/systemd/system/nametag.service              │
 │  /etc/modules-load.d/usblp.conf                   │
 │  /etc/udev/rules.d/99-brother-ql.rules            │
-│  /opt/brother/PTouch/ql820nwb/  (driver files)    │
 │                                                   │
-│  Ports: 5000 (HTTP, local network only)           │
-│  USB:   /dev/usb/lp0                              │
+│  WiFi profiles (NetworkManager):                  │
+│  ├── STARLINK 🚀     priority 50 (event hotspot)  │
+│  └── Happy LANding   priority 10 (home network)   │
+│                                                   │
+│  Port: 5000 (localhost only, via Cloudflare)      │
+│  USB:  /dev/usb/lp0                               │
 └────────────────────────┬─────────────────────────┘
                          │ USB
                ┌─────────▼──────────┐
@@ -304,10 +330,11 @@ Power on
 | `python3`, `python3-pip` | Runtime |
 | `python3-pil` | Image rendering |
 | `libusb-1.0-0` | USB access |
-| `imagemagick` | Image format conversion (setup only) |
+| `imagemagick` | Image format conversion |
 | `libc6:armhf` | 32-bit ARM compatibility for Brother filter binary |
 | `qrencode` | QR code generation |
-| `ql820nwbpdrv-2.1.4-0.armhf.deb` | Official Brother driver (provides filter binaries) |
+| `cloudflared` | Cloudflare Tunnel client |
+| `ql820nwbpdrv-2.1.4-0.armhf.deb` | Official Brother driver |
 
 ### 7.3 Python Dependencies
 
@@ -323,7 +350,7 @@ Power on
 
 ### 8.1 Label Rendering
 
-All labels are rendered as in-memory PIL images at a fixed 696 × 271 pixels (62mm × ~28mm at 300dpi):
+All labels are rendered as in-memory PIL images at 696 × 271 pixels (62mm × ~28mm at 300dpi):
 
 ```
 ┌──────────────────────────────────────────┐ ← 8px stripe (#1a1a2e)
@@ -336,8 +363,6 @@ All labels are rendered as in-memory PIL images at a fixed 696 × 271 pixels (62
   696px × 271px  |  300dpi  |  62mm roll
 ```
 
-Font fallback: if DejaVu fonts are unavailable, `ImageFont.load_default()` is used.
-
 ### 8.2 Configuration Management
 
 The active event brand is controlled by a single line in `.env`:
@@ -346,37 +371,51 @@ The active event brand is controlled by a single line in `.env`:
 DEFAULT_SUBTITLE=Guild42.ch
 ```
 
-The Flask app reads this on every request (no caching), so a restart is only needed to apply a change server-wide. The admin panel in the UI overrides the subtitle for that browser session only.
+Switch event:
+```bash
+echo "DEFAULT_SUBTITLE=CH-Open.ch" > ~/nametag/.env
+sudo systemctl restart nametag
+```
 
-### 8.3 Error Handling
+Available values: `Guild42.ch`, `CH-Open.ch`, `Workshop-Tage.ch`
+
+### 8.3 Network / Tunnel
+
+The Flask app listens on `localhost:5000` only. Cloudflare Tunnel (`cloudflared`) forwards public HTTPS traffic from `printer.guild42.ch` to `localhost:5000` via an outbound QUIC connection — no inbound firewall rules or port forwarding required.
+
+WiFi failover is handled by NetworkManager priority:
+
+| Network | Priority | Use case |
+|---------|----------|---------|
+| STARLINK 🚀 (iPhone hotspot) | 50 | Event venues |
+| Happy LANding (home network) | 10 | Development / storage |
+
+### 8.4 Error Handling
 
 | Layer | Error | Handling |
 |-------|-------|---------|
-| Flask `/print` | Missing name field | Returns HTTP 400 with JSON error |
-| Flask `/print` | Print exception | Returns HTTP 500 with exception message |
-| Flask `/print` | `.env` missing | Falls back to `Guild42.ch` silently |
+| Flask `/print` | Missing name | HTTP 400 with JSON error |
+| Flask `/print` | Print exception | HTTP 500 with exception message |
+| Flask `/print` | `.env` missing | Falls back to `Guild42.ch` |
 | systemd | Flask crash | `Restart=always` with 10s backoff |
 | brother-setup.sh | `/dev/usb/lp0` absent | Logs warning; Flask starts anyway |
 
-### 8.4 Security
+### 8.5 Security
 
-The system makes an explicit trust decision: the local event WiFi network is trusted. There is no authentication, no HTTPS, and no rate limiting. This is appropriate because:
+The system makes an explicit trust decision. The Cloudflare Tunnel provides HTTPS with valid TLS certificate. No authentication is implemented because:
 
 - No personal data beyond a first name is transmitted
-- The physical venue controls network access
-- Adding authentication would create friction for attendees
+- Adding login would create friction for attendees
+- Cloudflare provides DDoS protection at the edge
 
-If deployed in a less trusted environment (e.g. open public WiFi), rate limiting via Flask-Limiter should be added.
+If abuse becomes a concern, rate limiting via Flask-Limiter should be added.
 
-### 8.5 Logging
-
-Flask logs all HTTP requests to stdout, captured by systemd journal:
+### 8.6 Logging
 
 ```bash
-sudo journalctl -u nametag -f
+sudo journalctl -u nametag -f       # Flask app logs
+sudo journalctl -u cloudflared -f   # Tunnel logs
 ```
-
-No application-level log files are written. Brother driver debug logs are written to `/tmp/br_cupswrapper_ink.log` when `$DEBUG > 0` (disabled by default).
 
 ---
 
@@ -385,68 +424,67 @@ No application-level log files are written. Brother driver debug logs are writte
 ### ADR-001: `linux_kernel` backend instead of CUPS
 
 **Context:**
-CUPS with the official Brother PPD driver and `ipp-usb` was attempted first. Jobs were accepted by CUPS but never reached the printer. Root causes identified:
+CUPS + Brother PPD driver + `ipp-usb` was attempted. Jobs were accepted but never printed. Root causes:
+- `rastertobrpt1` is a 32-bit ARM binary requiring `libc6:armhf` on 64-bit OS
+- Perl wrapper scripts had path resolution bugs (double `//`)
+- `ipp-usb` blocked direct USB access
+- Printer IPP implementation returned 0 bytes to some CUPS queries
 
-- The Brother filter binary `rastertobrpt1` is a 32-bit ARM ELF binary; on 64-bit Raspberry Pi OS it requires `libc6:armhf`
-- The Brother Perl wrapper scripts contained path resolution bugs (double `//` in constructed paths) due to incorrect `$basedir` calculation
-- `ipp-usb` claimed the USB device as an IPP network printer, blocking direct USB access
-- The printer's IPP implementation returned `0 bytes` in response to some CUPS backend queries, causing silent job completion without printing
+**Decision:** Use `brother_ql` with `linux_kernel` backend directly to `/dev/usb/lp0`.
 
-**Decision:**
-Use `brother_ql` with the `linux_kernel` backend, writing directly to `/dev/usb/lp0` via the `usblp` kernel module. CUPS and `ipp-usb` are disabled.
-
-**Consequences:**
-- Printing is reliable and fast
-- The setup is significantly simpler
-- The printer cannot be shared as a network printer to other clients
-- The Brother CUPS driver is still installed (provides `rastertobrpt1` and related binaries used by `brother_ql` internally)
+**Consequences:** Reliable printing. CUPS and `ipp-usb` disabled. Printer not shareable as network printer.
 
 ---
 
-### ADR-002: File-based configuration over database or environment variables
+### ADR-002: Cloudflare Tunnel for public access
 
 **Context:**
-The system serves three different event brands. The active brand must be switchable by an operator who is not a developer, using only SSH access.
+Attendees arrive with their own mobile network. Requiring everyone to join a shared WiFi creates friction and is not always feasible at venues. The Pi has no static public IP and port forwarding is not available on mobile hotspots.
 
-**Decision:**
-A plain text `.env` file with a single `DEFAULT_SUBTITLE=` key. The Flask app reads it on each request.
+**Decision:** Use Cloudflare Tunnel (`cloudflared`) with a fixed domain `printer.guild42.ch`. The tunnel connects outbound from the Pi — no inbound firewall rules needed.
 
 **Consequences:**
-- Switching events requires one `echo` command and a service restart
-- No migration scripts, no schema, no admin UI needed
-- The `.env` file is excluded from git (`.gitignore`) to avoid accidental credential exposure in forks
-- `.env.example` is committed as a template
+- Attendees access the system from any network via QR code
+- Fixed domain means QR code is printed once and never changes
+- HTTPS with valid TLS certificate provided automatically by Cloudflare
+- Requires internet connectivity on the Pi (via hotspot or venue WiFi)
+- Free tier sufficient for event kiosk usage
 
 ---
 
-### ADR-003: No authentication
+### ADR-003: Dual WiFi profile with priority-based failover
 
 **Context:**
-The kiosk is deployed in a physical venue on a local WiFi network. Attendees are expected to print their own badge. The only data transmitted is a first name and an event label.
+The Pi is used both at home (development, storage) and at events (venues with no fixed WiFi). A manual WiFi switch before each event would be error-prone.
 
-**Decision:**
-No login, no token, no rate limiting.
+**Decision:** Configure two WiFi profiles in NetworkManager with priorities. iPhone hotspot gets priority 50; home network gets priority 10. Both set to autoconnect.
 
 **Consequences:**
-- Zero friction for attendees
-- Anyone on the local network can trigger print jobs
-- Acceptable risk for the community event threat model
-- Not suitable for deployment on untrusted public networks without adding Flask-Limiter
+- Pi automatically connects to hotspot at events, falls back to home network otherwise
+- No manual intervention required when moving between environments
+- Operator must ensure hotspot SSID/password matches the saved profile
 
 ---
 
-### ADR-004: Single-file Flask application
+### ADR-004: File-based configuration over database
 
 **Context:**
-The system has one endpoint that does one thing. Introducing a package structure, blueprints, or an ORM would add complexity without benefit.
+Three event brands need to be selectable. Operator uses SSH only.
 
-**Decision:**
-Everything in a single `app.py`.
+**Decision:** Plain `.env` file with `DEFAULT_SUBTITLE=` key.
 
-**Consequences:**
-- Easy to read and modify by any Python developer
-- Simple to deploy (copy one file)
-- Will require refactoring if functionality grows significantly (multiple printers, job queue, admin API)
+**Consequences:** One-command event switching. No schema, no migration, no admin UI.
+
+---
+
+### ADR-005: No authentication
+
+**Context:**
+Kiosk at a physical venue. Only a first name is transmitted.
+
+**Decision:** No login, no rate limiting.
+
+**Consequences:** Zero friction for attendees. Not suitable for untrusted public networks without Flask-Limiter.
 
 ---
 
@@ -457,14 +495,18 @@ Everything in a single `app.py`.
 ```
 Quality
 ├── Reliability
-│   ├── Printer available after reboot (systemd + brother-setup.sh)
-│   └── Service auto-restarts on crash (Restart=always)
+│   ├── Prints after reboot (systemd + brother-setup.sh)
+│   └── Auto-restarts on crash (Restart=always)
+├── Accessibility
+│   ├── Works from any mobile network (Cloudflare Tunnel)
+│   └── HTTPS with valid certificate
 ├── Usability
-│   ├── No instructions needed (single input field)
+│   ├── No instructions needed (single input)
 │   ├── Live preview before printing
 │   └── Mobile-optimised layout
 ├── Operability
-│   ├── Event switching in < 30 seconds (one .env edit + restart)
+│   ├── Event switching < 30 seconds (.env + restart)
+│   ├── Automatic WiFi failover (NetworkManager priority)
 │   └── Log access via journalctl
 └── Maintainability
     ├── Single-file application
@@ -476,11 +518,11 @@ Quality
 
 | ID | Quality | Scenario | Measure |
 |----|---------|----------|---------|
-| Q1 | Reliability | Pi reboots before an event | System prints within 15 seconds of boot completing |
-| Q2 | Reliability | Flask crashes during event | systemd restarts it within 10 seconds |
-| Q3 | Usability | Attendee has never used the system | Badge printed within 60 seconds of scanning QR code |
-| Q4 | Operability | Operator switches from Guild42 to CH-Open | Done in under 30 seconds via SSH |
-| Q5 | Portability | System moved to new venue with different IP | QR code regenerated; no other changes needed |
+| Q1 | Reliability | Pi reboots before event | System prints within 20 seconds of boot |
+| Q2 | Reliability | Flask crashes mid-event | systemd restarts within 10 seconds |
+| Q3 | Accessibility | Attendee on 5G mobile | Badge printed via `printer.guild42.ch` without joining venue WiFi |
+| Q4 | Operability | Switch Guild42 → CH-Open | Done in under 30 seconds via SSH |
+| Q5 | Portability | New venue, unknown WiFi | Operator enables iPhone hotspot; Pi connects automatically |
 
 ---
 
@@ -488,11 +530,12 @@ Quality
 
 | ID | Risk | Probability | Impact | Mitigation |
 |----|------|-------------|--------|-----------|
-| R1 | `brother_ql` library deprecated | Medium | High | Fork or replace with direct raster generation if needed |
-| R2 | Sample DK rolls not recognised by printer chip | High | Low | Document: use genuine DK-22205 rolls only |
-| R3 | Flask development server overloaded | Low | Medium | Serial print queue is sufficient for event scale; upgrade to gunicorn if needed |
-| R4 | IP address changes between events | High | Low | Regenerate QR code; consider mDNS (`guild42-printer.local`) |
-| R5 | usblp module unavailable after OS upgrade | Low | High | Pin OS version; test after upgrades |
+| R1 | `brother_ql` deprecated | Medium | High | Fork or replace with direct raster generation |
+| R2 | Sample DK rolls not recognised | High | Low | Use genuine DK-22205 rolls only |
+| R3 | Cloudflare free tier limits | Low | Medium | Monitor usage; upgrade if needed |
+| R4 | iPhone hotspot SSID changes | Low | High | Update NetworkManager profile before event |
+| R5 | `usblp` unavailable after OS upgrade | Low | High | Pin OS version; test after upgrades |
+| R6 | Cloudflare outage | Very Low | High | Fallback: local WiFi QR code pointing to `192.168.x.x:5000` |
 
 ---
 
@@ -501,6 +544,8 @@ Quality
 | Term | Definition |
 |------|-----------|
 | arc42 | Lean architecture documentation template (arc42.org) |
+| Cloudflare Tunnel | Outbound tunnel service exposing local services via public HTTPS URL |
+| cloudflared | Cloudflare Tunnel client daemon |
 | DK-22205 | Brother continuous paper roll, 62mm wide, white |
 | Flask | Lightweight Python web framework |
 | ipp-usb | Linux daemon exposing USB printers as IPP network devices |
@@ -508,9 +553,8 @@ Quality
 | brother_ql | Python library for Brother QL label printers |
 | usblp | Linux kernel module for USB printer device access |
 | lp0 | First USB printer device node at `/dev/usb/lp0` |
-| systemd | Linux service manager used for auto-start and supervision |
-| udev | Linux device manager used for USB permissions |
-| QR code | 2D barcode encoding the web app URL for attendee access |
+| NetworkManager | Linux network configuration daemon |
+| QUIC | UDP-based transport protocol used by Cloudflare Tunnel |
 
 ---
 
@@ -522,5 +566,6 @@ Quality
 | brother_ql library | https://github.com/pklaus/brother_ql |
 | Brother QL-820NWBc driver | https://support.brother.com |
 | Flask documentation | https://flask.palletsprojects.com |
+| Cloudflare Tunnel docs | https://developers.cloudflare.com/cloudflare-one/connections/connect-apps |
 | Guild42.ch | https://guild42.ch |
 | Zooey.ch (hardware sponsor) | https://zooey.ch |
