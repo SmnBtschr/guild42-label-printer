@@ -215,6 +215,104 @@ Use genuine DK-22205 rolls only — sample rolls may not be recognised.
 
 ---
 
+## REST API (optional)
+
+Besides the kiosk page, the printer can be triggered from another system — for example an event
+check-in that prints a badge as soon as someone signs in.
+
+**The API is off until you switch it on.** It only exists once an `api_tokens.txt` file is
+present; without that file every `/api/v1/...` route answers `404` and the application behaves
+exactly as it did before. Nothing about the kiosk page changes either way.
+
+### Switching it on
+
+```bash
+cd /opt/nametag                      # wherever the app lives
+cp api_tokens.txt.example api_tokens.txt
+
+# Create a token. It is shown ONCE - store it where the calling system can read it.
+python3 -c "import secrets,hashlib; t=secrets.token_urlsafe(32); \
+  print('token:', t); print('hash :', hashlib.sha256(t.encode()).hexdigest())"
+```
+
+Put the **hash** into `api_tokens.txt`, one token per line, with a label of your choosing:
+
+```
+checkin-desk:3f8a...c21b
+```
+
+The label never leaves the machine except in the log, where it lets you tell callers apart. The
+token itself is never written to disk and never logged.
+
+No restart is needed — the file is read per request.
+
+### Revoking a token
+
+Delete its line. It stops working with the next request; no restart, no downtime, and other
+tokens are unaffected. This is why each caller should get its own line.
+
+### Endpoints
+
+Both require `Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/print` | Print a badge. Body: `{"name": "Anna Muster", "subtitle": "Guild42.ch"}` — `subtitle` is optional and falls back to `DEFAULT_SUBTITLE` from `.env`. |
+| `GET` | `/api/v1/health` | Check whether the printer device can be opened, before promising a user anything. |
+
+```bash
+curl -X POST https://printer.example.ch/api/v1/print \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Anna Muster"}'
+```
+
+### What a success response does and does not mean
+
+```json
+{"ok": true, "accepted": true, "name": "Anna Muster"}
+```
+
+**`accepted`, not `printed`.** The response means the raster was handed to the printer and the
+device took it. Whether a label actually came out — paper left on the roll, no jam, label not
+peeled off — cannot be observed from here, and claiming otherwise would make callers report
+something to their users that may not be true.
+
+| Status | Meaning |
+|---|---|
+| `400` | `name` missing or empty |
+| `401` | token missing, malformed or unknown (no further detail, on purpose) |
+| `404` | the API is not enabled on this installation (no token file) |
+| `429` | rate limit reached |
+| `503` | printer device missing or not openable |
+| `500` | printing failed for another reason — details are in the log, not in the response |
+
+### Rate limits
+
+Printing costs material, so `/api/v1/print` is limited. Defaults are `10/minute` per token and
+`30/minute` overall; both can be changed in `.env`:
+
+```
+API_RATE_LIMIT=10/minute
+API_RATE_LIMIT_GLOBAL=30/minute
+API_TOKENS_FILE=/etc/nametag/api_tokens.txt   # optional, defaults to the app directory
+```
+
+The limits need `Flask-Limiter` (added to `requirements.txt`). The kiosk route `/print` is
+deliberately left unlimited so the existing behaviour is unchanged — add a limit there too if your
+installation is reachable from outside.
+
+### Tests
+
+```bash
+pip install pytest
+python3 -m pytest tests/
+```
+
+They mock the printer backend and never touch a real device, so they run anywhere.
+
+---
+
 ## Credits
 
 - Hardware: [Zooey.ch](https://zooey.ch)

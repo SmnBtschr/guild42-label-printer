@@ -1,0 +1,13 @@
+# API tokens for the optional REST API (see README, section "REST API").
+#
+# One token per line:   <label>:<sha256-of-the-token>
+# The label is only for you - it shows up in the log so you can tell callers apart.
+# Only the HASH belongs here. The token itself is shown once, when you create it:
+#
+#   python3 -c "import secrets,hashlib; t=secrets.token_urlsafe(32); \
+#     print('token:', t); print('hash :', hashlib.sha256(t.encode()).hexdigest())"
+#
+# To revoke a token, delete its line. It stops working immediately - no restart needed.
+# Copy this file to api_tokens.txt to switch the API on. Without that file there is no API.
+
+# guild42-checkin:0000000000000000000000000000000000000000000000000000000000000000
