@@ -3,7 +3,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Active |
 | Author | Guild42.ch |
 | Hardware Sponsor | Zooey.ch |
@@ -17,7 +17,7 @@
 
 The Guild42 Self-Service Name Badge Printer allows event attendees to print personalised name badges without staff assistance. Attendees scan a QR code at the check-in desk, open a web page on their mobile phone, enter their first name, and receive a printed label within seconds.
 
-The system must: 
+The system must:
 
 - Be operable by any attendee without instructions
 - Print a legible 62mm label within 5 seconds of submission
@@ -42,7 +42,8 @@ The system must:
 |------|-------------|-------------|
 | Event attendee | Guild42 / CH-Open / Workshop-Tage participants | Self-service badge printing without friction |
 | Event operator | Guild42 board (Simon) | Reliable system, simple event switching |
-| Hardware sponsor | Zooey.ch | System makes good use of donated hardware |
+| Hardware sponsor (printer) | Zooey.ch | System makes good use of donated hardware |
+| Hardware owner (dongle+SIM) | Guild42.ch | 4G connectivity independent of venue WiFi |
 | Community events | CH-Open.ch, Workshop-Tage.ch | Reusable by other Swiss tech community events |
 
 ---
@@ -54,9 +55,11 @@ The system must:
 | Constraint | Background |
 |-----------|-----------|
 | Raspberry Pi OS Bookworm 64-bit | Available hardware; 64-bit required for performance |
-| Brother QL-820NWBc via USB | Donated hardware; must use this specific printer model |
+| Brother QL-820NWBc via USB | Donated by Zooey.ch; must use this specific printer model |
 | DK-22205 roll (62mm continuous) | Standard roll available for QL-820NWBc |
 | Public HTTPS access required | Attendees must access the system from their own mobile network |
+| Brovi E3372-325 4G dongle | Owned by Guild42.ch; provides venue-independent internet connectivity |
+| Migros Mobile prepaid SIM | Owned by Guild42.ch; Swiss 4G coverage for event venues |
 | Python ecosystem | Team familiarity; `brother_ql` library only available in Python |
 
 ### 2.2 Organisational Constraints
@@ -116,22 +119,23 @@ Internet (any network)
 └────────┬──────────┘
          │ QUIC tunnel (outbound from Pi)
          ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Local Network / Hotspot                │
-│                                                         │
-│   ┌───────────────────────────────────────────────┐     │
-│   │  Raspberry Pi 4  (guild42-printer.local)      │     │
-│   │                                               │     │
-│   │  cloudflared  ◀──▶  Flask :5000               │     │
-│   │                          │                   │     │
-│   │                    /dev/usb/lp0               │     │
-│   └──────────────────────────┬────────────────────┘     │
-└──────────────────────────────┼─────────────────────────┘
-                               │ USB
-                      ┌────────▼──────────┐
-                      │ Brother QL-820NWBc │
-                      │  DK-22205 62mm     │
-                      └───────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│              Raspberry Pi 4  (guild42-printer.local)         │
+│                                                              │
+│  cloudflared  ◀──▶  Flask :5000                              │
+│                          │                                   │
+│                    /dev/usb/lp0 (printer)                    │
+│                                                              │
+│  Network interfaces:                                         │
+│  ├── wlan0  iPhone hotspot        (priority 50)              │
+│  ├── usb0   Brovi E3372-325 4G    (priority 30)  ──▶ 4G/LTE │
+│  └── wlan0  Home WiFi             (priority 10)              │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ USB
+                  ┌────────▼──────────┐
+                  │ Brother QL-820NWBc │
+                  │  DK-22205 62mm     │
+                  └───────────────────┘
 ```
 
 ---
@@ -142,7 +146,7 @@ Internet (any network)
 |------|----------|
 | Reliability | Bypass CUPS; use `brother_ql` with `linux_kernel` backend directly to `/dev/usb/lp0` |
 | Public accessibility | Cloudflare Tunnel with fixed domain `printer.guild42.ch` — no port forwarding, no static IP |
-| Venue portability | Two WiFi profiles with priority: iPhone hotspot (priority 50) > home network (priority 10) |
+| Venue portability | Three network profiles with priority: iPhone hotspot (50) > 4G dongle (30) > home network (10) |
 | Simplicity | Single Python file, no database, no framework beyond Flask |
 | Operability | File-based configuration (`.env`); systemd for auto-restart and boot start |
 | Zero attendee friction | No login, no app install — QR code opens directly to print form over public HTTPS |
@@ -255,9 +259,10 @@ Operator (SSH)                    Raspberry Pi
 ```
 Power on
     │
-    ├─▶ NetworkManager connects WiFi
-    │     ├── "STARLINK 🚀" hotspot available? → connect (priority 50)
-    │     └── fallback: "Happy LANding" home network (priority 10)
+    ├─▶ NetworkManager connects network (highest available priority)
+    │     ├── iPhone hotspot available?  → connect (priority 50)
+    │     ├── 4G dongle (usb0) active?   → connect (priority 30)
+    │     └── fallback: home WiFi        → connect (priority 10)
     │
     ├─▶ systemd: load usblp module (modules-load.d/usblp.conf)
     │
@@ -309,9 +314,10 @@ Internet
 │  /etc/modules-load.d/usblp.conf                   │
 │  /etc/udev/rules.d/99-brother-ql.rules            │
 │                                                   │
-│  WiFi profiles (NetworkManager):                  │
-│  ├── STARLINK 🚀     priority 50 (event hotspot)  │
-│  └── Happy LANding   priority 10 (home network)   │
+│  Network profiles (NetworkManager):               │
+│  ├── iPhone hotspot  priority 50 (event primary)  │
+│  ├── usb0 4G dongle  priority 30 (event fallback) │
+│  └── Home WiFi       priority 10 (development)    │
 │                                                   │
 │  Port: 5000 (localhost only, via Cloudflare)      │
 │  USB:  /dev/usb/lp0                               │
@@ -383,12 +389,15 @@ Available values: `Guild42.ch`, `CH-Open.ch`, `Workshop-Tage.ch`
 
 The Flask app listens on `localhost:5000` only. Cloudflare Tunnel (`cloudflared`) forwards public HTTPS traffic from `printer.guild42.ch` to `localhost:5000` via an outbound QUIC connection — no inbound firewall rules or port forwarding required.
 
-WiFi failover is handled by NetworkManager priority:
+Network failover is handled by NetworkManager priority:
 
-| Network | Priority | Use case |
-|---------|----------|---------|
-| STARLINK 🚀 (iPhone hotspot) | 50 | Event venues |
-| Happy LANding (home network) | 10 | Development / storage |
+| Network | Interface | Priority | Use case |
+|---------|-----------|----------|---------|
+| iPhone hotspot | wlan0 | 50 | Primary at events |
+| Brovi E3372-325 4G dongle | usb0 | 30 | Fallback at events (owned by Guild42.ch) |
+| Home WiFi | wlan0 | 10 | Development / storage |
+
+The 4G dongle (Brovi E3372-325) runs in HiLink mode and presents itself as a USB ethernet adapter (`usb0`). SIM PIN entry and connection status are managed via the dongle's built-in web UI at `http://192.168.8.1`. The SIM card is a Migros Mobile prepaid card (Swiss 4G coverage), owned by Guild42.ch.
 
 ### 8.4 Error Handling
 
@@ -452,17 +461,21 @@ Attendees arrive with their own mobile network. Requiring everyone to join a sha
 
 ---
 
-### ADR-003: Dual WiFi profile with priority-based failover
+### ADR-003: Three-tier network failover with priority-based selection
 
 **Context:**
-The Pi is used both at home (development, storage) and at events (venues with no fixed WiFi). A manual WiFi switch before each event would be error-prone.
+The Pi is used both at home (development, storage) and at events (venues with no fixed WiFi). A manual network switch before each event would be error-prone. Events may be in venues where the operator's iPhone battery is low or where 4G coverage is better than WiFi.
 
-**Decision:** Configure two WiFi profiles in NetworkManager with priorities. iPhone hotspot gets priority 50; home network gets priority 10. Both set to autoconnect.
+**Decision:** Configure three network profiles in NetworkManager with priorities:
+- iPhone hotspot: priority 50 (primary at events — fast, always with operator)
+- Brovi E3372-325 4G dongle with Migros Mobile SIM: priority 30 (fallback — venue-independent, owned by Guild42.ch)
+- Home WiFi: priority 10 (development and storage only)
 
 **Consequences:**
-- Pi automatically connects to hotspot at events, falls back to home network otherwise
+- Pi automatically selects the best available network
 - No manual intervention required when moving between environments
-- Operator must ensure hotspot SSID/password matches the saved profile
+- 4G dongle provides a reliable fallback independent of venue infrastructure and iPhone battery
+- SIM PIN must be entered once via `http://192.168.8.1` after dongle is inserted
 
 ---
 
@@ -534,6 +547,8 @@ Quality
 | R2 | Sample DK rolls not recognised | High | Low | Use genuine DK-22205 rolls only |
 | R3 | Cloudflare free tier limits | Low | Medium | Monitor usage; upgrade if needed |
 | R4 | iPhone hotspot SSID changes | Low | High | Update NetworkManager profile before event |
+| R7 | 4G dongle SIM credit runs out | Low | Medium | Check Migros Mobile prepaid balance before event; top up in advance |
+| R8 | No 4G coverage at venue | Low | Low | iPhone hotspot has higher priority; 4G dongle is fallback only |
 | R5 | `usblp` unavailable after OS upgrade | Low | High | Pin OS version; test after upgrades |
 | R6 | Cloudflare outage | Very Low | High | Fallback: local WiFi QR code pointing to `192.168.x.x:5000` |
 
@@ -555,6 +570,9 @@ Quality
 | lp0 | First USB printer device node at `/dev/usb/lp0` |
 | NetworkManager | Linux network configuration daemon |
 | QUIC | UDP-based transport protocol used by Cloudflare Tunnel |
+| Brovi E3372-325 | 4G USB dongle running in HiLink mode (presents as USB ethernet adapter) |
+| HiLink mode | Dongle operating mode where the device acts as a router with web UI at 192.168.8.1 |
+| Migros Mobile | Swiss MVNO (prepaid SIM); used for 4G connectivity at events |
 
 ---
 

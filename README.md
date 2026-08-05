@@ -25,12 +25,14 @@ Hardware kindly provided by [Zooey.ch](https://zooey.ch).
 
 ## Hardware Requirements
 
-| Component | Specification |
-|-----------|--------------|
-| Single-board computer | Raspberry Pi 3B+ or 4 (64-bit OS) |
-| Label printer | Brother QL-820NWBc |
-| Label roll | DK-22205 (62mm continuous white paper) |
-| Connection | USB (printer connected directly to Pi) |
+| Component | Specification | Owner |
+|-----------|--------------|-------|
+| Single-board computer | Raspberry Pi 3B+ or 4 (64-bit OS) | Guild42.ch |
+| Label printer | Brother QL-820NWBc | Zooey.ch (donated) |
+| Label roll | DK-22205 (62mm continuous white paper) | Guild42.ch |
+| Connection | USB (printer connected directly to Pi) | — |
+| 4G USB Dongle | Brovi E3372-325 (HiLink mode, usb0) | Guild42.ch |
+| SIM card | Migros Mobile prepaid | Guild42.ch |
 
 ---
 
@@ -159,7 +161,15 @@ sudo systemctl enable cloudflared
 sudo systemctl start cloudflared
 ```
 
-### 8. Configure WiFi failover
+### 8. Configure network failover
+
+The Pi supports three network connections with automatic priority-based failover:
+
+| Network | Priority | Use case |
+|---------|----------|---------|
+| iPhone hotspot | 50 | Primary at events |
+| 4G Dongle (Brovi E3372-325) | 30 | Fallback at events |
+| Home WiFi | 10 | Development / storage |
 
 ```bash
 # Add event hotspot with high priority
@@ -167,10 +177,18 @@ sudo nmcli dev wifi connect 'YOUR-HOTSPOT-SSID' password 'YOUR-PASSWORD'
 sudo nmcli con modify 'YOUR-HOTSPOT-SSID' connection.autoconnect-priority 50
 sudo nmcli con modify 'YOUR-HOTSPOT-SSID' connection.autoconnect yes
 
+# Configure 4G dongle (appears as usb0 in HiLink mode)
+# Enter SIM PIN via browser at http://192.168.8.1
+sudo nmcli con modify 'Wired connection 1' connection.autoconnect-priority 30
+sudo nmcli con modify 'Wired connection 1' connection.autoconnect yes
+
 # Set home network to lower priority
 sudo nmcli con modify 'YOUR-HOME-SSID' connection.autoconnect-priority 10
 sudo nmcli con modify 'YOUR-HOME-SSID' connection.autoconnect yes
 ```
+
+**4G Dongle setup:**
+The Brovi E3372-325 runs in HiLink mode and appears as a USB ethernet adapter (`usb0`). To enter the SIM PIN or check connection status, open `http://192.168.8.1` in a browser while connected to the Pi's network.
 
 ### 9. Generate the QR code
 
