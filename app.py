@@ -7,6 +7,15 @@ import os
 
 app = Flask(__name__)
 
+# Optional REST API (api.py). It is a no-op unless someone creates a token file, so an
+# installation that does not want it is unaffected. See the "REST API" section in README.md.
+try:
+    from api import api_bp
+
+    app.register_blueprint(api_bp)
+except ImportError:  # api.py removed or dependencies missing - the kiosk keeps working
+    pass
+
 PRINTER_MODEL = 'QL-820NWB'
 PRINTER_URI   = '/dev/usb/lp0'
 LABEL_SIZE    = '62'
@@ -83,7 +92,10 @@ def print_label():
         )
         return jsonify({'ok': True, 'name': name})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # The exception text can contain device paths and internals; it goes to the log, not to
+        # the caller. The UI only needs to know that printing failed.
+        app.logger.exception('print failed: %s', e)
+        return jsonify({'error': 'Printing failed'}), 500
 
 
 if __name__ == '__main__':
