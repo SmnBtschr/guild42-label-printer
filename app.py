@@ -7,6 +7,33 @@ import os
 
 app = Flask(__name__)
 
+# Optional REST API (api.py). It is a no-op unless someone creates a token file, so an
+# installation that does not want it is unaffected. See the "REST API" section in README.md.
+limiter = None
+try:
+    from api import api_bp, register_limits
+
+    app.register_blueprint(api_bp)
+
+    # The limits api.py defines were never attached to anything: register_limits() had no
+    # caller, so Flask-Limiter was installed and inert while README.md already promised
+    # "10/minute per token, 30/minute overall" and a 429. Printing costs material, so an
+    # unlimited endpoint is not academic.
+    try:
+        from flask_limiter import Limiter
+        from flask_limiter.util import get_remote_address
+
+        # default_limits stays empty on purpose: only the API blueprint is capped. The kiosk
+        # route /print must stay unlimited - README.md says so, and a queue at the printer is
+        # not the place to discover a rate limit.
+        limiter = Limiter(get_remote_address, app=app, default_limits=[],
+                          storage_uri="memory://")
+        register_limits(limiter)
+    except ImportError:  # Flask-Limiter absent - the API works, just uncapped, as before
+        pass
+except ImportError:  # api.py removed or dependencies missing - the kiosk keeps working
+    pass
+
 PRINTER_MODEL = 'QL-820NWB'
 PRINTER_URI   = '/dev/usb/lp0'
 LABEL_SIZE    = '62'
@@ -83,7 +110,10 @@ def print_label():
         )
         return jsonify({'ok': True, 'name': name})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # The exception text can contain device paths and internals; it goes to the log, not to
+        # the caller. The UI only needs to know that printing failed.
+        app.logger.exception('print failed: %s', e)
+        return jsonify({'error': 'Printing failed'}), 500
 
 
 if __name__ == '__main__':
