@@ -20,12 +20,52 @@ import hashlib
 import hmac
 import logging
 import os
+import secrets
+import threading
+import time
 
 from flask import Blueprint, jsonify, request
 
 log = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api/v1")
+
+# ── Exclusive session ────────────────────────────────────────────────────────────────────────
+#
+# WHY IN MEMORY AND NOT IN A FILE: the session is meant to die with the process. A restart of the
+# Pi is the only way out of a forgotten session - that is the deliberate design, not an oversight
+# (no admin token, no expiry). Writing it to a file would keep a stale session alive across
+# exactly the restart that is supposed to clear it.
+#
+# WHY ONLY THE HASH: same reasoning as the token file. The value is handed out once, on
+# onboarding; from then on we only ever need to recognise it.
+#
+# WHY A LOCK: two onboarding requests arriving together must not both win. Without it the second
+# caller could overwrite the first - which is precisely the hijack this mechanism exists to
+# prevent, only through the back door of a race.
+_session_lock = threading.Lock()
+_session = None  # {"digest": str, "started": float, "prints": int}
+
+
+def session_status() -> dict:
+    """What the kiosk UI shows. Never contains the token."""
+    with _session_lock:
+        if _session is None:
+            return {"connected": False, "prints": 0}
+        return {"connected": True, "prints": _session["prints"],
+                "since": int(_session["started"])}
+
+
+def _session_matches() -> bool:
+    """Does the caller present the token of the running session?"""
+    presented = request.headers.get("X-Session-Token", "").strip()
+    if not presented:
+        return False
+    digest = hashlib.sha256(presented.encode()).hexdigest()
+    with _session_lock:
+        if _session is None:
+            return False
+        return hmac.compare_digest(digest, _session["digest"])
 
 # Same limits as the web UI in app.py — the API must not be able to produce labels the kiosk
 # cannot, otherwise the two paths drift apart.
@@ -142,6 +182,69 @@ def _guard():
     return None
 
 
+@api_bp.post("/session")
+def onboard():
+    """Onboarding: claim the printer for one caller.
+
+    Deliberately NOT exempt from the guard above. An unauthenticated onboarding endpoint would
+    mean "whoever reaches the address gets the session" - and this device is reachable from any
+    network by design (README: "Accessible from any network via https://printer.guild42.ch").
+    A single call from outside would then lock out the very system the session is for, with a
+    trip to the Pi as the only remedy. Keeping it behind the existing token adds no second auth
+    model: the static token from api_tokens.txt is the entry ticket, nothing more.
+
+    A second onboarding is REFUSED, never silently overwritten - overwriting is the hijack.
+    """
+    data = request.get_json(silent=True) or {}
+    gewuenscht = (data.get("token") or "").strip()
+    if gewuenscht and len(gewuenscht) < 16:
+        # A caller may bring its own token, but not a guessable one.
+        return jsonify({"error": "token_too_short"}), 400
+    token = gewuenscht or secrets.token_urlsafe(32)
+
+    global _session
+    with _session_lock:
+        if _session is not None:
+            log.info("api: onboarding refused, session already running")
+            return jsonify({"error": "session_active"}), 409
+        _session = {"digest": hashlib.sha256(token.encode()).hexdigest(),
+                    "started": time.time(), "prints": 0}
+    log.info("api: session onboarded via token '%s'",
+             request.environ.get("api.token_label", "?"))
+    # The only moment the value leaves this process.
+    return jsonify({"ok": True, "token": token}), 201
+
+
+@api_bp.delete("/session")
+def offboard():
+    """Offboarding: release the printer. Only the holder of the session token may do this.
+
+    There is no admin override on purpose (decision 07.08.2026): an override without
+    authentication would bypass the whole mechanism, and one with authentication would be the
+    second auth model this design avoids. The way out of a forgotten session is a restart of the
+    Pi - which is also why the session lives in memory.
+    """
+    global _session
+    with _session_lock:
+        if _session is None:
+            return jsonify({"error": "no_session"}), 404
+    if not _session_matches():
+        # Same reticence as the guard: no hint whether the token was missing or wrong.
+        log.info("api: offboarding rejected from %s", request.remote_addr)
+        return jsonify({"error": "session_token_invalid"}), 403
+    with _session_lock:
+        gedruckt = _session["prints"]
+        _session = None
+    log.info("api: session offboarded after %d prints", gedruckt)
+    return jsonify({"ok": True, "prints": gedruckt}), 200
+
+
+@api_bp.get("/session")
+def session_info():
+    """Is a session running, and how much has it printed? No token value is ever returned."""
+    return jsonify(session_status()), 200
+
+
 @api_bp.get("/health")
 def health():
     """Can we reach the printer device at all? Lets a caller check before promising anything."""
@@ -167,6 +270,17 @@ def print_label():
     Returns ``accepted``, never ``printed`` — see the module docstring.
     """
     from app import LABEL_SIZE, PRINTER_MODEL, PRINTER_URI, create_label_image, get_default_subtitle
+
+    # While a session is running the printer belongs to it: the session token has to come along,
+    # in X-Session-Token. Without a session nothing changes - callers with a static token print
+    # as before. That keeps the addition backwards compatible and still delivers what the
+    # exclusivity is for: once someone has claimed the printer, nobody else prints on it.
+    with _session_lock:
+        session_laeuft = _session is not None
+    if session_laeuft and not _session_matches():
+        log.info("api: print rejected, session token missing or wrong (from %s)",
+                 request.remote_addr)
+        return jsonify({"error": "session_token_invalid"}), 403
 
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()[:MAX_NAME]
@@ -199,6 +313,12 @@ def print_label():
         log.exception("api: print failed for token '%s': %s",
                       request.environ.get("api.token_label", "?"), exc)
         return jsonify({"error": "print_failed"}), 500
+
+    # Counted only after the printer took the data - the kiosk display should show labels, not
+    # attempts.
+    with _session_lock:
+        if _session is not None:
+            _session["prints"] += 1
 
     log.info("api: accepted print for '%s' via token '%s'",
              name, request.environ.get("api.token_label", "?"))

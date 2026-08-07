@@ -89,6 +89,28 @@ def index():
     return render_template('index.html', default_subtitle=default, subtitles=SUBTITLES)
 
 
+@app.route('/session-status')
+def session_status():
+    """Read-only status for the kiosk page: is an API session connected, and how much has it
+    printed?
+
+    Deliberately here and not on the API blueprint: the kiosk page has no token, so a status
+    behind the API guard could not be displayed at all. It reveals nothing the kiosk does not
+    already expose - anyone who can open this page can print on this printer - and it returns a
+    boolean plus a counter, never the session token.
+
+    Without api.py (or without a token file) it reports enabled=false and the page simply shows
+    no status line.
+    """
+    try:
+        from api import api_enabled, session_status as api_session_status
+    except ImportError:
+        return jsonify({'enabled': False})
+    if not api_enabled():
+        return jsonify({'enabled': False})
+    return jsonify({'enabled': True, **api_session_status()})
+
+
 @app.route('/print', methods=['POST'])
 def print_label():
     data = request.get_json()

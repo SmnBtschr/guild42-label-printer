@@ -259,6 +259,9 @@ Both require `Authorization: Bearer <token>`.
 |---|---|---|
 | `POST` | `/api/v1/print` | Print a badge. Body: `{"name": "Anna Muster", "subtitle": "Guild42.ch"}` — `subtitle` is optional and falls back to `DEFAULT_SUBTITLE` from `.env`. |
 | `GET` | `/api/v1/health` | Check whether the printer device can be opened, before promising a user anything. |
+| `POST` | `/api/v1/session` | **Onboarding** — claim the printer for one caller. Returns the session token once. |
+| `DELETE` | `/api/v1/session` | **Offboarding** — release it again. Requires the session token. |
+| `GET` | `/api/v1/session` | Is a session running, and how many badges has it printed? |
 
 ```bash
 curl -X POST https://printer.example.ch/api/v1/print \
@@ -266,6 +269,46 @@ curl -X POST https://printer.example.ch/api/v1/print \
   -H "Content-Type: application/json" \
   -d '{"name": "Anna Muster"}'
 ```
+
+### Exclusive session (onboarding / offboarding)
+
+One caller can claim the printer, so that a running check-in desk is not disturbed by a second
+system printing into the same queue.
+
+```bash
+# Onboarding - the token comes back exactly once, keep it
+curl -X POST https://printer.example.ch/api/v1/session -H "Authorization: Bearer $TOKEN"
+# {"ok": true, "token": "5Jd...Qy"}
+
+# From now on every print carries it
+curl -X POST https://printer.example.ch/api/v1/print \
+  -H "Authorization: Bearer $TOKEN" -H "X-Session-Token: 5Jd...Qy" \
+  -H "Content-Type: application/json" -d '{"name": "Anna Muster"}'
+
+# Offboarding - only the holder of the session token can do this
+curl -X DELETE https://printer.example.ch/api/v1/session \
+  -H "Authorization: Bearer $TOKEN" -H "X-Session-Token: 5Jd...Qy"
+```
+
+You may supply your own token with `{"token": "..."}` (at least 16 characters) instead of letting
+the server generate one.
+
+Four properties, and the reasoning behind each:
+
+- **A second onboarding is refused with `409`, never silently overwritten.** Overwriting would be
+  the hijack this mechanism exists to prevent.
+- **Onboarding sits behind the normal token guard.** This device is reachable from any network by
+  design; an unauthenticated onboarding would mean whoever reaches the address first locks
+  everyone else out — with a trip to the Pi as the only remedy. The static token from
+  `api_tokens.txt` is the entry ticket, so there is no second authentication model.
+- **The session lives in memory and dies with the process.** There is no admin override and no
+  expiry: restarting the service is the way out of a forgotten session. That is also why it is
+  not written to a file — a file would survive exactly the restart that is supposed to clear it.
+- **Without a session nothing changes.** Callers with a static token print as before; exclusivity
+  begins with the first onboarding.
+
+The kiosk page shows a small line while a session is connected, including how many badges it has
+printed. It is display only — there are no controls, and the session token is never shown.
 
 ### What a success response does and does not mean
 
@@ -282,7 +325,9 @@ something to their users that may not be true.
 |---|---|
 | `400` | `name` missing or empty |
 | `401` | token missing, malformed or unknown (no further detail, on purpose) |
+| `403` | a session is running and the `X-Session-Token` is missing or wrong |
 | `404` | the API is not enabled on this installation (no token file) |
+| `409` | onboarding refused — a session is already running |
 | `429` | rate limit reached |
 | `503` | printer device missing or not openable |
 | `500` | printing failed for another reason — details are in the log, not in the response |

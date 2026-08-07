@@ -41,6 +41,9 @@ def umgebung(tmp_path, monkeypatch):
     # the suite would spend its own budget and later tests would fail with 429 for no reason.
     if kiosk.limiter is not None:
         kiosk.limiter.reset()
+    # Same for the session: it is module state on purpose (it must die with the process), which
+    # means one test's session would leak into the next.
+    api._session = None
     return kiosk.app.test_client(), tokens, drucker
 
 
@@ -190,3 +193,131 @@ def test_der_bestehende_kiosk_weg_bleibt_unberuehrt(umgebung):
         antwort = client.post("/print", json={"name": "Anna"})
     assert antwort.status_code == 200
     assert antwort.get_json()["ok"] is True
+
+
+# ── Exclusive session (onboarding / offboarding) ─────────────────────────────────────────────
+
+KOPF = {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _onboard(client):
+    antwort = client.post("/api/v1/session", headers=KOPF)
+    return antwort, (antwort.get_json() or {}).get("token")
+
+
+def test_onboarding_liefert_ein_token(umgebung):
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    antwort, session_token = _onboard(client)
+    assert antwort.status_code == 201
+    assert session_token and len(session_token) >= 32
+    # The status endpoint must never hand the value back out.
+    zustand = client.get("/api/v1/session", headers=KOPF).get_json()
+    assert zustand["connected"] is True and zustand["prints"] == 0
+    assert session_token not in client.get("/api/v1/session", headers=KOPF).get_data(as_text=True)
+
+
+def test_zweites_onboarding_wird_abgewiesen(umgebung):
+    """The core of the mechanism: refused, not silently overwritten - overwriting IS the hijack."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _, erstes = _onboard(client)
+    zweite_antwort, _ = _onboard(client)
+    assert zweite_antwort.status_code == 409
+    assert zweite_antwort.get_json()["error"] == "session_active"
+    # And the first session is untouched - it still prints.
+    with mock.patch("brother_ql.backends.helpers.send"):
+        weiter = client.post("/api/v1/print", json={"name": "Anna"},
+                             headers={**KOPF, "X-Session-Token": erstes})
+    assert weiter.status_code == 200
+
+
+def test_onboarding_braucht_das_statische_token(umgebung):
+    """Onboarding stays behind the guard - the device is reachable from any network."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    assert client.post("/api/v1/session").status_code == 401
+    assert client.post("/api/v1/session",
+                       headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+def test_drucken_ohne_session_token_wird_abgewiesen(umgebung):
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    antwort = client.post("/api/v1/print", json={"name": "Anna"}, headers=KOPF)
+    assert antwort.status_code == 403
+    assert antwort.get_json()["error"] == "session_token_invalid"
+
+
+def test_drucken_mit_falschem_session_token_wird_abgewiesen(umgebung):
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    antwort = client.post("/api/v1/print", json={"name": "Anna"},
+                          headers={**KOPF, "X-Session-Token": "nicht-das-richtige-token"})
+    assert antwort.status_code == 403
+
+
+def test_nach_offboarding_ist_onboarding_wieder_moeglich(umgebung):
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _, erstes = _onboard(client)
+    weg = client.delete("/api/v1/session", headers={**KOPF, "X-Session-Token": erstes})
+    assert weg.status_code == 200
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is False
+    zweite_antwort, zweites = _onboard(client)
+    assert zweite_antwort.status_code == 201
+    assert zweites and zweites != erstes
+
+
+def test_offboarding_nur_mit_dem_session_token(umgebung):
+    """No admin override on purpose (decision 07.08.2026) - otherwise it bypasses the mechanism."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    assert client.delete("/api/v1/session", headers=KOPF).status_code == 403
+    assert client.delete("/api/v1/session",
+                         headers={**KOPF, "X-Session-Token": "falsch"}).status_code == 403
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is True
+
+
+def test_druckzaehler_zaehlt_nur_angenommene_drucke(umgebung):
+    client, tokens, drucker = umgebung
+    _mit_token(tokens)
+    _, session_token = _onboard(client)
+    kopf = {**KOPF, "X-Session-Token": session_token}
+    with mock.patch("brother_ql.backends.helpers.send"):
+        client.post("/api/v1/print", json={"name": "Anna"}, headers=kopf)
+        client.post("/api/v1/print", json={"name": "Bea"}, headers=kopf)
+    drucker.unlink()  # printer gone -> 503, must NOT count
+    assert client.post("/api/v1/print", json={"name": "Cem"}, headers=kopf).status_code == 503
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["prints"] == 2
+
+
+def test_ohne_session_druckt_der_statische_token_wie_bisher(umgebung):
+    """Backwards compatible: the exclusivity starts with the first onboarding, not before."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    with mock.patch("brother_ql.backends.helpers.send"):
+        assert client.post("/api/v1/print", json={"name": "Anna"},
+                           headers=KOPF).status_code == 200
+
+
+def test_kiosk_statuszeile_zeigt_die_session_ohne_token(umgebung):
+    """The kiosk page has no token, so its status endpoint sits outside the API guard."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    aus = client.get("/session-status").get_json()
+    assert aus == {"enabled": True, "connected": False, "prints": 0}
+    _, session_token = _onboard(client)
+    ein = client.get("/session-status").get_json()
+    assert ein["connected"] is True
+    assert session_token not in client.get("/session-status").get_data(as_text=True)
+
+
+def test_ohne_tokendatei_meldet_die_statuszeile_nichts(umgebung):
+    """No token file -> no API -> the kiosk shows no status line at all."""
+    client, tokens, _ = umgebung
+    assert not tokens.exists()
+    assert client.get("/session-status").get_json() == {"enabled": False}
