@@ -110,10 +110,20 @@ def _limits() -> tuple:
 
 
 def register_limits(limiter):
-    """Attach rate limits. Called by app.py when Flask-Limiter is available."""
+    """Attach rate limits. Called by app.py when Flask-Limiter is available.
+
+    ``exempt_when`` is not decoration: the limiter runs as an app-wide ``before_request``, so it
+    fires BEFORE the blueprint guard below that answers 404 when there is no token file. Without
+    the exemption an installation that never enabled the API would start answering 429 on the
+    eleventh probe - and a 429 is an admission that something is listening. That would quietly
+    break the promise this module is built on ("no token file, no API"). Skipping the limit costs
+    nothing there: without a token file every request is refused anyway.
+    """
     per_token, overall = _limits()
-    limiter.limit(per_token, key_func=lambda: request.headers.get("Authorization", "anon"))(api_bp)
-    limiter.limit(overall)(api_bp)
+    aus = lambda: not api_enabled()  # noqa: E731 - one expression, named for the reader
+    limiter.limit(per_token, key_func=lambda: request.headers.get("Authorization", "anon"),
+                  exempt_when=aus)(api_bp)
+    limiter.limit(overall, exempt_when=aus)(api_bp)
 
 
 @api_bp.before_request

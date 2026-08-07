@@ -37,6 +37,10 @@ def umgebung(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "token_file", lambda: str(tokens))
     monkeypatch.setattr(kiosk, "PRINTER_URI", str(drucker))
     kiosk.app.config.update(TESTING=True)
+    # The rate limit counter lives in memory and survives between tests, so without this reset
+    # the suite would spend its own budget and later tests would fail with 429 for no reason.
+    if kiosk.limiter is not None:
+        kiosk.limiter.reset()
     return kiosk.app.test_client(), tokens, drucker
 
 
@@ -144,6 +148,38 @@ def test_health_meldet_den_druckerzustand(umgebung):
     antwort = client.get("/api/v1/health", headers=kopf)
     assert antwort.status_code == 503
     assert antwort.get_json()["printer"] == "unavailable"
+
+
+def test_rate_limit_greift_beim_elften_druck(umgebung):
+    """README.md promises "10/minute per token" and a 429 - this proves the promise is kept.
+
+    Until now register_limits() had no caller: Flask-Limiter was installed, the limits were
+    defined, and nothing attached them. The endpoint was uncapped while the documentation said
+    otherwise.
+    """
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    kopf = {"Authorization": f"Bearer {TOKEN}"}
+    with mock.patch("brother_ql.backends.helpers.send"):
+        codes = [client.post("/api/v1/print", json={"name": "Anna"}, headers=kopf).status_code
+                 for _ in range(11)]
+    assert codes[:10] == [200] * 10, codes
+    assert codes[10] == 429, codes
+
+
+def test_ohne_tokendatei_bleibt_es_404_auch_unter_last(umgebung):
+    """The limiter must not betray an API that is supposed to look absent.
+
+    Flask-Limiter hooks into the app-wide before_request and therefore runs BEFORE the blueprint
+    guard that returns 404. Without ``exempt_when`` in register_limits() the eleventh probe would
+    answer 429 - and that is an admission that something is there. Fifteen calls, all 404.
+    """
+    client, tokens, _ = umgebung
+    assert not tokens.exists()
+    codes = {client.post("/api/v1/print", json={"name": "Anna"},
+                         headers={"Authorization": f"Bearer {TOKEN}"}).status_code
+             for _ in range(15)}
+    assert codes == {404}, codes
 
 
 def test_der_bestehende_kiosk_weg_bleibt_unberuehrt(umgebung):
