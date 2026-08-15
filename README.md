@@ -310,6 +310,44 @@ Four properties, and the reasoning behind each:
 The kiosk page shows a small line while a session is connected, including how many badges it has
 printed. It is display only — there are no controls, and the session token is never shown.
 
+#### Signed session tokens (optional) — surviving a restart of the caller
+
+The four properties above have one hard edge: the holder is recognised by the **hash of a value**,
+so it has to remember that value. A caller that is redeployed daily cannot. Guild42's check-in
+system loses its token on every deploy — from then on every print and even the offboarding answers
+`403`, and the only documented remedy is a restart of this Pi.
+
+If the caller brings a **signed token** instead, the session remembers *who* opened it rather than
+only *what* was handed over, and the same holder may take it over with a fresh token:
+
+```ini
+# .env — all three are optional; without SESSION_JWKS_URL nothing changes
+SESSION_JWKS_URL=https://app.guild42.ch/.well-known/jwks.json
+SESSION_JWT_ISSUER=https://app.guild42.ch
+SESSION_JWT_AUDIENCE=guild42-label-printer
+```
+
+The token must be a `RS256` JWT signed by a key published at `SESSION_JWKS_URL`, carrying `sub`,
+`exp` and the expected `aud`/`iss`. Identity is `iss` + `sub`: the same identity resumes the
+running session (`200` with `"resumed": true`, print counter preserved), everything else keeps
+getting `409`.
+
+Deliberate limits:
+
+- **The key set address is configured here, never taken from the token.** Reading `iss` and
+  fetching keys from wherever it points would let the caller decide who is trusted.
+- **A session opened with a static token has no identity** and cannot be taken over by any
+  signature — only the value counts, exactly as before.
+- **`exp` is required.** A token without expiry would be an eternal one, and this one travels as an
+  HTTP header.
+- **Only `RS256`.** A header claiming another algorithm is refused even when the RSA signature is
+  valid (`none` and HMAC are the alg-confusion attack).
+- **An unreachable issuer costs the takeover, not the operation.** The running session keeps
+  printing with the token it already knows.
+
+No new dependency: verification is a modular exponentiation plus a byte comparison from the
+standard library.
+
 ### What a success response does and does not mean
 
 ```json
@@ -327,7 +365,7 @@ something to their users that may not be true.
 | `401` | token missing, malformed or unknown (no further detail, on purpose) |
 | `403` | a session is running and the `X-Session-Token` is missing or wrong |
 | `404` | the API is not enabled on this installation (no token file) |
-| `409` | onboarding refused — a session is already running |
+| `409` | onboarding refused — a session is already running (and the caller did not prove the same signed identity) |
 | `429` | rate limit reached |
 | `503` | printer device missing or not openable |
 | `500` | printing failed for another reason — details are in the log, not in the response |

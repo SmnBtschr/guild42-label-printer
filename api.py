@@ -43,8 +43,15 @@ api_bp = Blueprint("api", __name__, url_prefix="/api/v1")
 # WHY A LOCK: two onboarding requests arriving together must not both win. Without it the second
 # caller could overwrite the first - which is precisely the hijack this mechanism exists to
 # prevent, only through the back door of a race.
+#
+# WHY AN OPTIONAL IDENTITY: recognising the holder by the hash of a value means the holder has to
+# REMEMBER that value. A caller that is redeployed daily cannot (guild42 loses it on every
+# restart, and the documented way out is a restart of this Pi). If the presented token is a JWT
+# signed by a key published at SESSION_JWKS_URL, we therefore remember WHO opened the session
+# (iss+sub) instead of only WHAT was handed over - and the same WHO may take it over with a fresh
+# token. Without SESSION_JWKS_URL nothing changes: identity stays None and only the digest counts.
 _session_lock = threading.Lock()
-_session = None  # {"digest": str, "started": float, "prints": int}
+_session = None  # {"digest": str, "started": float, "prints": int, "identity": dict | None}
 
 
 def session_status() -> dict:
@@ -56,8 +63,44 @@ def session_status() -> dict:
                 "since": int(_session["started"])}
 
 
+def _signed_session_config() -> dict:
+    """Where to fetch the caller's public keys, and what to expect in the token.
+
+    Empty ``jwks_url`` switches the whole signed-token path off — the API then behaves exactly as
+    before, which is the same "not configured, not there" rule the token file follows.
+    """
+    return {"jwks_url": _env("SESSION_JWKS_URL"),
+            "issuer": _env("SESSION_JWT_ISSUER"),
+            "audience": _env("SESSION_JWT_AUDIENCE", "guild42-label-printer")}
+
+
+def _ausweis(token: str):
+    """Identity proven by a signed token, or ``None``. Never raises — a broken issuer must not
+    turn into a 500 on the print path."""
+    config = _signed_session_config()
+    if not config["jwks_url"] or not token:
+        return None
+    try:
+        import session_jwt
+        return session_jwt.verify(token, config["jwks_url"], config["issuer"], config["audience"])
+    except Exception as problem:  # pragma: no cover - defence in depth
+        log.warning("api: signed session token could not be checked: %s", problem)
+        return None
+
+
+def _selbe_identitaet(a, b) -> bool:
+    """Same caller? Only iss+sub count — the token value and its jti change on every restart."""
+    return bool(a) and bool(b) and a["iss"] == b["iss"] and a["sub"] == b["sub"]
+
+
 def _session_matches() -> bool:
-    """Does the caller present the token of the running session?"""
+    """Does the caller present the token of the running session?
+
+    Two ways in, and the second exists only for the restart case: either the presented value
+    hashes to the stored digest (unchanged behaviour), or it is a valid signed token from the same
+    identity that opened the session. A session opened with a static token has no identity, so no
+    signature can take it over.
+    """
     presented = request.headers.get("X-Session-Token", "").strip()
     if not presented:
         return False
@@ -65,7 +108,12 @@ def _session_matches() -> bool:
     with _session_lock:
         if _session is None:
             return False
-        return hmac.compare_digest(digest, _session["digest"])
+        if hmac.compare_digest(digest, _session["digest"]):
+            return True
+        gespeichert = _session.get("identity")
+    if not gespeichert:
+        return False
+    return _selbe_identitaet(_ausweis(presented), gespeichert)
 
 # Same limits as the web UI in app.py — the API must not be able to produce labels the kiosk
 # cannot, otherwise the two paths drift apart.
@@ -194,6 +242,13 @@ def onboard():
     model: the static token from api_tokens.txt is the entry ticket, nothing more.
 
     A second onboarding is REFUSED, never silently overwritten - overwriting is the hijack.
+
+    THE ONE EXCEPTION, and why it is not a hijack: if the running session was opened with a signed
+    token and the new request presents a valid signature from the SAME identity (iss+sub), the
+    session is handed over to the new token. That is not a second caller taking the printer - it
+    is the same caller after a restart, proving it with a key we fetched from its own published
+    JWK Set. A different identity, an invalid signature, or a session opened with a static token
+    still gets 409.
     """
     data = request.get_json(silent=True) or {}
     gewuenscht = (data.get("token") or "").strip()
@@ -201,16 +256,27 @@ def onboard():
         # A caller may bring its own token, but not a guessable one.
         return jsonify({"error": "token_too_short"}), 400
     token = gewuenscht or secrets.token_urlsafe(32)
+    identitaet = _ausweis(gewuenscht) if gewuenscht else None
+    digest = hashlib.sha256(token.encode()).hexdigest()
 
     global _session
     with _session_lock:
         if _session is not None:
-            log.info("api: onboarding refused, session already running")
-            return jsonify({"error": "session_active"}), 409
-        _session = {"digest": hashlib.sha256(token.encode()).hexdigest(),
-                    "started": time.time(), "prints": 0}
-    log.info("api: session onboarded via token '%s'",
-             request.environ.get("api.token_label", "?"))
+            if not _selbe_identitaet(identitaet, _session.get("identity")):
+                log.info("api: onboarding refused, session already running")
+                return jsonify({"error": "session_active"}), 409
+            # Same proven identity: keep the running session (counter and start time), swap the
+            # token it is recognised by. Nothing is lost, and no restart of this Pi is needed.
+            _session["digest"] = digest
+            gedruckt = _session["prints"]
+            log.info("api: session resumed by '%s' (same signed identity, %d prints so far)",
+                     identitaet["sub"], gedruckt)
+            return jsonify({"ok": True, "token": token, "resumed": True, "prints": gedruckt}), 200
+        _session = {"digest": digest, "started": time.time(), "prints": 0,
+                    "identity": identitaet}
+    log.info("api: session onboarded via token '%s'%s",
+             request.environ.get("api.token_label", "?"),
+             " (signed identity %s)" % identitaet["sub"] if identitaet else "")
     # The only moment the value leaves this process.
     return jsonify({"ok": True, "token": token}), 201
 
