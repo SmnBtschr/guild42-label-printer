@@ -316,6 +316,16 @@ def health():
     """Can we reach the printer device at all? Lets a caller check before promising anything."""
     from app import PRINTER_URI
 
+    try:
+        from simulator import sim_enabled
+        if sim_enabled():
+            # The simulator is always "ready" - there is no device that could be missing. The
+            # distinct value lets a caller see it is talking to the simulation, without changing
+            # the contract (200 = you may print).
+            return jsonify({"printer": "simulated"}), 200
+    except ImportError:
+        pass
+
     ready = False
     try:
         # os.open without O_CREAT, not open(..., "wb"): the builtin CREATES the file when it is
@@ -354,25 +364,37 @@ def print_label():
     if not name:
         return jsonify({"error": "name_required"}), 400
 
-    if not os.path.exists(PRINTER_URI):
+    sim = False
+    try:
+        from simulator import sim_enabled, record_print
+        sim = sim_enabled()
+    except ImportError:
+        pass
+
+    if not sim and not os.path.exists(PRINTER_URI):
         # Fail fast instead of letting the backend block on a device that is not there.
         log.warning("api: printer device %s missing", PRINTER_URI)
         return jsonify({"error": "printer_unavailable"}), 503
 
     try:
-        from brother_ql.backends.helpers import send
-        from brother_ql.conversion import convert
-        from brother_ql.raster import BrotherQLRaster
-
         image = create_label_image(name, subtitle)
-        raster = BrotherQLRaster(PRINTER_MODEL)
-        raster.exception_on_warning = False
-        convert(qlr=raster, images=[image], label=LABEL_SIZE, rotate="auto", dpi_600=False)
-        send(
-            instructions=raster.data,
-            printer_identifier=PRINTER_URI,
-            backend_identifier="linux_kernel",
-        )
+        if sim:
+            # Same pipeline, different sink (see simulator.py). Session accounting and the
+            # response below stay identical - a caller cannot tell simulation from hardware.
+            record_print(image, name, subtitle, "api")
+        else:
+            from brother_ql.backends.helpers import send
+            from brother_ql.conversion import convert
+            from brother_ql.raster import BrotherQLRaster
+
+            raster = BrotherQLRaster(PRINTER_MODEL)
+            raster.exception_on_warning = False
+            convert(qlr=raster, images=[image], label=LABEL_SIZE, rotate="auto", dpi_600=False)
+            send(
+                instructions=raster.data,
+                printer_identifier=PRINTER_URI,
+                backend_identifier="linux_kernel",
+            )
     except Exception as exc:
         # Details go to the log, never into the response: the message can carry device paths and
         # internals. Same reasoning as the fix applied to /print in app.py.

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label Printer Simulator</title>
+<style>
+  /* One deliberate look: a dim print room. The labels are white and carry the contrast. */
+  :root {
+    --bg: #14161c;
+    --bg2: #1b1e27;
+    --body: #2a2e3a;
+    --body-hi: #343948;
+    --edge: #0c0d12;
+    --ink: #e8e6df;
+    --dim: #8b8fa0;
+    --accent: #7c5cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #232736, var(--bg) 60%);
+    color: var(--ink);
+    font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 28px 16px 60px;
+    overflow-x: hidden;
+  }
+  header { text-align: center; margin-bottom: 26px; }
+  h1 { font-size: 1.35rem; font-weight: 600; letter-spacing: .02em; }
+  .sub { color: var(--dim); font-size: .85rem; margin-top: 4px; }
+  .sub b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         background: #4caf76; margin-right: 6px; vertical-align: 1px;
+         box-shadow: 0 0 6px #4caf76; }
+  .dot.off { background: #b3543f; box-shadow: 0 0 6px #b3543f; }
+
+  /* ── The printer ─────────────────────────────────────────────── */
+  .scene { position: relative; width: min(520px, 94vw); }
+  .printer {
+    position: relative; margin: 0 auto; width: 100%; height: 190px;
+    background: linear-gradient(180deg, var(--body-hi), var(--body) 45%, #23262f);
+    border-radius: 18px 18px 12px 12px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  .printer.working { animation: shake .18s linear infinite; }
+  @keyframes shake {
+    0%,100% { transform: translate(0,0); }
+    25%     { transform: translate(.5px,-.5px); }
+    75%     { transform: translate(-.5px,.5px); }
+  }
+  .brand { position: absolute; top: 18px; left: 26px; font-size: .72rem; letter-spacing: .18em;
+           text-transform: uppercase; color: var(--dim); }
+  .model { position: absolute; top: 36px; left: 26px; font-size: .95rem; font-weight: 600; }
+  .led { position: absolute; top: 24px; right: 26px; width: 10px; height: 10px;
+         border-radius: 50%; background: #55597055; transition: background .3s; }
+  .printer.working .led { animation: blink .5s steps(2) infinite; }
+  @keyframes blink { 0% { background: #58e08a; box-shadow: 0 0 8px #58e08a; }
+                     100% { background: #2a5c3f; box-shadow: none; } }
+  .lid { position: absolute; top: 62px; left: 18px; right: 18px; height: 52px;
+         background: linear-gradient(180deg, #232733, #1d202a);
+         border-radius: 10px; box-shadow: inset 0 2px 6px rgba(0,0,0,.5); }
+  .slot { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
+          width: 78%; height: 10px; background: var(--edge); border-radius: 5px;
+          box-shadow: inset 0 3px 6px rgba(0,0,0,.9), 0 1px 0 rgba(255,255,255,.06); }
+  .feet { display: flex; justify-content: space-between; width: 86%; margin: 0 auto; }
+  .feet i { width: 34px; height: 8px; background: #101218; border-radius: 0 0 6px 6px; }
+
+  /* ── Label coming out of the slot ────────────────────────────── */
+  .out-guide {
+    position: absolute; left: 50%; top: 158px; transform: translateX(-50%);
+    width: min(380px, 72%); overflow: hidden; pointer-events: none; z-index: 3;
+  }
+  .out-label {
+    display: block; width: 100%; border-radius: 3px;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+    transform: translateY(-101%);
+  }
+  .out-guide.feeding .out-label {
+    animation: feed 2.4s steps(28, end) forwards;
+  }
+  @keyframes feed { from { transform: translateY(-101%); } to { transform: translateY(0); } }
+  .out-guide.tear { overflow: visible; }
+  .out-guide.tear .out-label {
+    animation: tear .8s cubic-bezier(.45,.05,.6,1) forwards;
+  }
+  @keyframes tear {
+    0%   { transform: translateY(0) rotate(0deg); opacity: 1; }
+    25%  { transform: translateY(8px) rotate(-2.5deg); }
+    100% { transform: translateY(150px) rotate(4deg); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .printer.working { animation: none; }
+    .out-guide.feeding .out-label { animation: feed .01s forwards; }
+    .out-guide.tear .out-label { animation: tear .01s forwards; }
+  }
+
+  /* ── Tray with the printed pile ──────────────────────────────── */
+  .tray { width: min(560px, 96vw); margin-top: 84px; }
+  .tray h2 { font-size: .78rem; letter-spacing: .14em; text-transform: uppercase;
+             color: var(--dim); margin-bottom: 14px; text-align: center; }
+  .pile { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+  .card {
+    width: 168px; background: #fff; border-radius: 4px; padding: 0; cursor: zoom-in;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5); border: 0; overflow: hidden;
+    transition: transform .15s;
+  }
+  .card:nth-child(odd)  { transform: rotate(-1.2deg); }
+  .card:nth-child(even) { transform: rotate(1deg); }
+  .card:hover, .card:focus-visible { transform: rotate(0) scale(1.06); outline: 2px solid var(--accent); }
+  .card img { display: block; width: 100%; }
+  .card .meta { font-size: .62rem; color: #666; padding: 3px 6px 4px;
+                display: flex; justify-content: space-between; background: #f5f4f0; }
+  .empty { color: var(--dim); text-align: center; font-size: .85rem; padding: 18px 0; }
+
+  /* ── Lightbox ────────────────────────────────────────────────── */
+  .box { position: fixed; inset: 0; background: rgba(8,9,13,.82); display: none;
+         align-items: center; justify-content: center; z-index: 10; cursor: zoom-out; }
+  .box.open { display: flex; }
+  .box figure { max-width: min(680px, 92vw); text-align: center; }
+  .box img { width: 100%; border-radius: 4px; box-shadow: 0 24px 70px rgba(0,0,0,.7);
+             background: #fff; }
+  .box figcaption { color: var(--dim); font-size: .8rem; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🖨️ Label Printer Simulator</h1>
+    <p class="sub"><span class="dot" id="conn"></span><b id="count">0</b> labels printed —
+       prints from the kiosk and the REST API appear here live</p>
+  </header>
+
+  <div class="scene">
+    <div class="printer" id="printer">
+      <span class="brand">Simulated</span>
+      <span class="model">QL-820NWB</span>
+      <span class="led"></span>
+      <div class="lid"></div>
+      <div class="slot"></div>
+    </div>
+    <div class="feet"><i></i><i></i></div>
+    <div class="out-guide" id="outGuide"><img class="out-label" id="outLabel" alt=""></div>
+  </div>
+
+  <section class="tray">
+    <h2>Output tray</h2>
+    <div class="pile" id="pile"><p class="empty" id="empty">Nothing printed yet —
+      print a badge in the kiosk or POST to /api/v1/print.</p></div>
+  </section>
+
+  <div class="box" id="box" onclick="this.classList.remove('open')">
+    <figure><img id="boxImg" alt=""><figcaption id="boxCap"></figcaption></figure>
+  </div>
+
+<script>
+  'use strict';
+  /* Poll /sim/prints and run one animation at a time: feed out of the slot, tear off, then the
+     label lands in the tray. Prints that already existed when the page opened go straight to
+     the tray - only genuinely new ones get the show. */
+  var lastSeen = 0, count = 0, firstLoad = true, queue = [], animating = false;
+
+  var printer = document.getElementById('printer');
+  var guide = document.getElementById('outGuide');
+  var outImg = document.getElementById('outLabel');
+  var pile = document.getElementById('pile');
+
+  function setCount(n) { document.getElementById('count').textContent = n; }
+
+  function trayAdd(p) {
+    var empty = document.getElementById('empty');
+    if (empty) empty.remove();
+    var b = document.createElement('button');
+    b.className = 'card';
+    b.innerHTML = '<img src="/sim/label/' + p.id + '.png" alt="Label ' + p.id + '">' +
+      '<span class="meta"><span>#' + p.id + ' · ' + p.source + '</span><span>' +
+      new Date(p.ts * 1000).toLocaleTimeString() + '</span></span>';
+    b.onclick = function () {
+      document.getElementById('boxImg').src = '/sim/label/' + p.id + '.png';
+      document.getElementById('boxCap').textContent =
+        '#' + p.id + ' — printed ' + new Date(p.ts * 1000).toLocaleString() +
+        ' via ' + p.source;
+      document.getElementById('box').classList.add('open');
+    };
+    pile.prepend(b);
+    while (pile.children.length > 12) pile.lastChild.remove();
+  }
+
+  function animate(p) {
+    animating = true;
+    printer.classList.add('working');
+    outImg.src = '/sim/label/' + p.id + '.png';
+    guide.classList.remove('tear');
+    /* restart the CSS animation reliably */
+    guide.classList.remove('feeding');
+    void guide.offsetWidth;
+    guide.classList.add('feeding');
+    setTimeout(function () {
+      printer.classList.remove('working');
+      guide.classList.add('tear');
+      setTimeout(function () {
+        guide.classList.remove('feeding', 'tear');
+        trayAdd(p);
+        count++; setCount(count);
+        animating = false;
+        pump();
+      }, 850);
+    }, 2600);
+  }
+
+  function pump() {
+    if (animating) return;
+    var next = queue.shift();
+    if (next) animate(next);
+  }
+
+  function poll() {
+    fetch('/sim/prints?since=' + lastSeen)
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) {
+        document.getElementById('conn').classList.remove('off');
+        d.prints.forEach(function (p) {
+          lastSeen = Math.max(lastSeen, p.id);
+          if (firstLoad) { trayAdd(p); count++; }
+          else queue.push(p);
+        });
+        if (firstLoad) { setCount(count); firstLoad = false; }
+        pump();
+      })
+      .catch(function () { document.getElementById('conn').classList.add('off'); });
+  }
+
+  poll();
+  setInterval(poll, 1200);
+</script>
+</body>
+</html>

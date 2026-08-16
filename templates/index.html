@@ -24,6 +24,10 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .status { text-align: center; font-size: 14px; margin-top: 1rem; min-height: 20px; }
 .ok { color: #0a7c4e; }
 .err { color: #c0392b; }
+.sim-link { display: block; margin-top: 12px; text-align: center; padding: 10px 14px;
+  border: 1.5px dashed #b7a6e8; border-radius: 8px; color: #6c4fd0; background: #f6f3ff;
+  text-decoration: none; font-size: 14px; }
+.sim-link:hover { background: #efe9ff; }
 .admin-toggle { margin-top: 2rem; text-align: center; }
 .admin-toggle button { background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 4px 8px; }
 .admin-toggle button:hover { color: #999; }
@@ -60,6 +64,14 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   <button class="print-btn" id="btn" onclick="doPrint()">🖨️ Print badge</button>
   <div class="status" id="status"></div>
+
+  {% if sim %}
+  <!-- Simulator installation only (PRINTER_SIM=1): opens the animated output view. On a real
+       device this block is not rendered at all. -->
+  <a class="sim-link" href="/sim" target="_blank" rel="noopener">
+    🎞️ Simulation: watch the printed labels
+  </a>
+  {% endif %}
 
   <div class="session-line" id="session-line">
     <span class="session-dot"></span>
