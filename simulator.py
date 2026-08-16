@@ -92,5 +92,15 @@ def sim_label(print_id: int):
         entry = next((e for e in _prints if e["id"] == print_id), None)
     if entry is None:
         abort(404)
-    return send_file(io.BytesIO(entry["png"]), mimetype="image/png",
-                     max_age=31536000)  # ids are never reused while the process lives
+    # NO CACHING, and the reason is not academic: print ids restart at 1 whenever this process
+    # does, and the process is meant to restart (no volume — a wiped history is a feature). A
+    # long max_age turns that into wrong data at the far end: a CDN in front of the simulator
+    # keeps serving label #1 of the *previous* run. Measured on 2026-08-16 against
+    # printer-int.guild42.ch — `cf-cache-status: HIT`, `age: 5426`, three labels returned bytes
+    # from a run 90 minutes earlier while the container itself served the correct ones.
+    #
+    # That breaks the one use this endpoint has: checking, over REST, what actually came out of
+    # the printer. Correctness beats a cache hit for a debugging surface.
+    antwort = send_file(io.BytesIO(entry["png"]), mimetype="image/png", max_age=0)
+    antwort.headers["Cache-Control"] = "no-store, max-age=0"
+    return antwort
