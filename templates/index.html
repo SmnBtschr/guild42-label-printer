@@ -30,6 +30,7 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .admin-panel { display: none; margin-top: 1rem; padding: 1rem; background: #f9f9f9; border: 1.5px dashed #ddd; border-radius: 8px; }
 .admin-panel.open { display: block; }
 .admin-panel p { font-size: 12px; color: #888; margin-bottom: 10px; }
+.admin-status { font-size: 11px; color: #0a7c4e; margin-top: 8px; min-height: 16px; text-align: center; }
 .radio-group { display: flex; flex-direction: column; gap: 8px; }
 .radio-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1.5px solid #e0e0e0; border-radius: 8px; cursor: pointer; background: white; transition: border-color 0.2s; }
 .radio-option:hover { border-color: #1a1a2e; }
@@ -44,7 +45,7 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   <h1>Print your name badge</h1>
 
   <label class="field-label">Your first name</label>
-  <input type="text" id="inp-name" placeholder="e.g. Martina" maxlength="12" oninput="updatePreview()" />
+  <input type="text" id="inp-name" placeholder="e.g. Martina" maxlength="15" oninput="updatePreview()" />
 
   <p class="preview-hint">Preview</p>
   <div class="preview">
@@ -60,17 +61,18 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     <button onclick="toggleAdmin()">⚙</button>
   </div>
   <div class="admin-panel" id="admin-panel">
-    <p>Select event label for this session:</p>
+    <p>Select event — applies immediately for all users:</p>
     <div class="radio-group">
       {% for s in subtitles %}
       <label class="radio-option {% if s == default_subtitle %}selected{% endif %}">
         <input type="radio" name="subtitle" value="{{ s }}"
           {% if s == default_subtitle %}checked{% endif %}
-          onchange="updatePreview(); updateSelected(this)" />
+          onchange="updateSelected(this)" />
         <span>{{ s }}</span>
       </label>
       {% endfor %}
     </div>
+    <div class="admin-status" id="admin-status"></div>
   </div>
 </div>
 
@@ -78,28 +80,48 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 function toggleAdmin() {
   document.getElementById('admin-panel').classList.toggle('open');
 }
-function updateSelected(radio) {
+
+async function updateSelected(radio) {
   document.querySelectorAll('.radio-option').forEach(el => el.classList.remove('selected'));
   radio.closest('.radio-option').classList.add('selected');
+  document.getElementById('prev-sub').textContent = radio.value;
+  const st = document.getElementById('admin-status');
+  st.textContent = 'Saving…';
+  try {
+    const res = await fetch('/set-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subtitle: radio.value })
+    });
+    const data = await res.json();
+    st.textContent = data.ok ? '✓ Saved for all users' : data.error;
+  } catch(e) {
+    st.textContent = 'Error saving.';
+  }
 }
+
 function getSubtitle() {
   const checked = document.querySelector('input[name="subtitle"]:checked');
   return checked ? checked.value : '{{ default_subtitle }}';
 }
+
 function updatePreview() {
   const name = document.getElementById('inp-name').value.trim();
   document.getElementById('prev-name').textContent = name || 'Your name';
-  document.getElementById('prev-sub').textContent = getSubtitle();
 }
+
 async function doPrint() {
   const name = document.getElementById('inp-name').value.trim();
   const subtitle = getSubtitle();
   const btn = document.getElementById('btn');
   const st = document.getElementById('status');
+
   if (!name) { st.className = 'status err'; st.textContent = 'Please enter your first name.'; return; }
+
   btn.disabled = true;
   st.className = 'status';
   st.textContent = 'Printing…';
+
   try {
     const res = await fetch('/print', {
       method: 'POST',
