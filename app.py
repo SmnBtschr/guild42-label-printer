@@ -65,7 +65,7 @@ def index():
 @app.route('/print', methods=['POST'])
 def print_label():
     data = request.get_json()
-    name = (data.get('name') or '').strip()[:40]
+    name = (data.get('name') or '').strip()[:12]
     subtitle = (data.get('subtitle') or get_default_subtitle()).strip()[:50]
 
     if not name:
