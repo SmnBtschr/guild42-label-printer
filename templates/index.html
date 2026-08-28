@@ -24,6 +24,10 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .status { text-align: center; font-size: 14px; margin-top: 1rem; min-height: 20px; }
 .ok { color: #0a7c4e; }
 .err { color: #c0392b; }
+.sim-link { display: block; margin-top: 12px; text-align: center; padding: 10px 14px;
+  border: 1.5px dashed #b7a6e8; border-radius: 8px; color: #6c4fd0; background: #f6f3ff;
+  text-decoration: none; font-size: 14px; }
+.sim-link:hover { background: #efe9ff; }
 .admin-toggle { margin-top: 2rem; text-align: center; }
 .admin-toggle button { background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 4px 8px; }
 .admin-toggle button:hover { color: #999; }
@@ -37,6 +41,11 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .radio-option.selected { border-color: #1a1a2e; background: #f0f0f5; }
 .radio-option input[type=radio] { accent-color: #1a1a2e; width: 16px; height: 16px; cursor: pointer; }
 .radio-option span { font-size: 14px; font-weight: 500; color: #1a1a2e; }
+/* API session line. Hidden unless an API session is actually connected, so a kiosk without the
+   REST API looks exactly as before. Display only - there is nothing to click here. */
+.session-line { display: none; align-items: center; gap: 8px; margin-top: 1.25rem; padding: 8px 12px; background: #f0f0f5; border-radius: 8px; font-size: 12px; color: #666; }
+.session-line.on { display: flex; }
+.session-dot { width: 8px; height: 8px; border-radius: 50%; background: #0a7c4e; flex: none; }
 </style>
 </head>
 <body>
@@ -56,6 +65,19 @@ button.print-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   <button class="print-btn" id="btn" onclick="doPrint()">🖨️ Print badge</button>
   <div class="status" id="status"></div>
+
+  {% if sim %}
+  <!-- Simulator installation only (PRINTER_SIM=1): opens the animated output view. On a real
+       device this block is not rendered at all. -->
+  <a class="sim-link" href="/sim" target="_blank" rel="noopener">
+    🎞️ Simulation: watch the printed labels
+  </a>
+  {% endif %}
+
+  <div class="session-line" id="session-line">
+    <span class="session-dot"></span>
+    <span id="session-text"></span>
+  </div>
 
   <div class="admin-toggle">
     <button onclick="toggleAdmin()">⚙</button>
@@ -144,6 +166,27 @@ async function doPrint() {
   }
   btn.disabled = false;
 }
+
+// API session status - display only, no controls. Polled rather than rendered once, because a
+// kiosk page stays open for hours and a value from page load would be wrong most of the time.
+// A failed request leaves the line as it is: the kiosk must never look broken because of it.
+async function refreshSession() {
+  try {
+    const res = await fetch('/session-status');
+    const d = await res.json();
+    const line = document.getElementById('session-line');
+    if (d.enabled && d.connected) {
+      const n = d.prints || 0;
+      document.getElementById('session-text').textContent =
+        'API session connected — ' + n + (n === 1 ? ' badge' : ' badges') + ' printed';
+      line.classList.add('on');
+    } else {
+      line.classList.remove('on');
+    }
+  } catch (e) { /* keep the last known state */ }
+}
+refreshSession();
+setInterval(refreshSession, 10000);
 </script>
 </body>
 </html>
