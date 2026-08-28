@@ -116,8 +116,8 @@ def _session_matches() -> bool:
     return _selbe_identitaet(_ausweis(presented), gespeichert)
 
 # Same limits as the web UI in app.py — the API must not be able to produce labels the kiosk
-# cannot, otherwise the two paths drift apart.
-MAX_NAME = 40
+# cannot, otherwise the two paths drift apart. MAX_NAME is imported from app.py for that reason
+# (lazily, in print_label(): app.py imports this module first).
 MAX_SUBTITLE = 50
 
 
@@ -345,7 +345,8 @@ def print_label():
 
     Returns ``accepted``, never ``printed`` — see the module docstring.
     """
-    from app import LABEL_SIZE, PRINTER_MODEL, PRINTER_URI, create_label_image, get_default_subtitle
+    from app import (LABEL_SIZE, MAX_NAME, PRINTER_MODEL, PRINTER_URI, create_label_image,
+                     get_active_subtitle)
 
     # While a session is running the printer belongs to it: the session token has to come along,
     # in X-Session-Token. Without a session nothing changes - callers with a static token print
@@ -360,7 +361,9 @@ def print_label():
 
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()[:MAX_NAME]
-    subtitle = (data.get("subtitle") or get_default_subtitle()).strip()[:MAX_SUBTITLE]
+    # No subtitle given: use the event the operator selected in the kiosk's admin panel, exactly
+    # as a kiosk print would - an API caller should not have to know which event is on today.
+    subtitle = (data.get("subtitle") or get_active_subtitle()).strip()[:MAX_SUBTITLE]
     if not name:
         return jsonify({"error": "name_required"}), 400
 

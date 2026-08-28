@@ -116,7 +116,8 @@ def test_name_wird_wie_im_kiosk_gekuerzt(umgebung):
     with mock.patch("brother_ql.backends.helpers.send"):
         antwort = client.post("/api/v1/print", json={"name": "A" * 100},
                               headers={"Authorization": f"Bearer {TOKEN}"})
-    assert len(antwort.get_json()["name"]) == 40
+    from app import MAX_NAME
+    assert len(antwort.get_json()["name"]) == MAX_NAME == 15
 
 
 def test_fehlendes_geraet_gibt_503(umgebung):

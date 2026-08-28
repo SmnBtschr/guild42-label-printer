@@ -1,7 +1,8 @@
 name: tests-and-image
 
-# Tests on every push/PR; the container image only from main. The image feeds the NAS
-# deployment (printer-int.guild42.ch, simulator mode) via GHCR.
+# Tests on every push/PR; the container image only from main. The image is pushed to GHCR under
+# the repository that runs the workflow (so forks publish to their own namespace and never need
+# to touch this file). It is what a container deployment in simulator mode runs.
 
 on:
   push:
@@ -39,10 +40,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR wants a lower-case image name; GITHUB_REPOSITORY keeps the owner's spelling.
+      - id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/plaintext-gmbh/guild42-label-printer:latest
-            ghcr.io/plaintext-gmbh/guild42-label-printer:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
