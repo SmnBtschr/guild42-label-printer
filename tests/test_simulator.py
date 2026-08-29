@@ -95,6 +95,43 @@ def test_label_is_never_cached(client):
     assert "max-age=31536000" not in steuerung
 
 
+def test_long_name_stays_inside_the_label(client):
+    """A name may be longer than the old 15 characters — it must not run off the paper.
+
+    guild42 makes the limit configurable per tenant (29.08.2026), so the renderer can no longer
+    lean on "15 characters never overflow". It measures instead: the text is scaled down until it
+    fits between the margins.
+    """
+    import app as kiosk
+    from PIL import ImageDraw
+
+    lang = "Wolfgang Amadeus Hörbiger"          # 25 characters, wide glyphs
+    bild = kiosk.create_label_image(lang, "https://guild42.ch")
+    zeichner = ImageDraw.Draw(bild)
+    schrift = kiosk._fitting_font(zeichner, lang, kiosk.FONT_BOLD, 80, 34, 696 - 40)
+
+    assert zeichner.textlength(lang, font=schrift) <= 696 - 40
+    # POSITIVKONTROLLE: der ungebremste 80px-Satz waere tatsaechlich zu breit gewesen — ohne das
+    # belegt die Zeile darueber nur, dass irgendetwas gemessen wurde.
+    gross = kiosk.ImageFont.truetype(kiosk.FONT_BOLD, 80)
+    assert zeichner.textlength(lang, font=gross) > 696 - 40
+    # und ein kurzer Name behaelt die volle Groesse
+    assert kiosk._fitting_font(zeichner, "Anna", kiosk.FONT_BOLD, 80, 34, 696 - 40).size == 80
+
+
+def test_max_name_kommt_aus_der_umgebung(client, monkeypatch):
+    """The limit is a setting now — guild42 may ask for more than 15 characters."""
+    import app as kiosk
+
+    assert kiosk.max_name() == 15                      # Vorgabe unveraendert
+    monkeypatch.setenv("MAX_NAME", "25")
+    assert kiosk.max_name() == 25
+    monkeypatch.setenv("MAX_NAME", "999")              # ausserhalb des Rahmens -> gekappt
+    assert kiosk.max_name() == 40
+    monkeypatch.setenv("MAX_NAME", "keine Zahl")       # Unsinn faellt auf die Vorgabe zurueck
+    assert kiosk.max_name() == 15
+
+
 def test_label_url_is_unique_per_run(client):
     """The id alone is not a unique address: it restarts at 1 with the process.
 

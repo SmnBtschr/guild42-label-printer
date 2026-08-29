@@ -414,7 +414,7 @@ def print_label():
 
     Returns ``accepted``, never ``printed`` — see the module docstring.
     """
-    from app import (LABEL_SIZE, MAX_NAME, MAX_SUBTITLE, PRINTER_MODEL, PRINTER_URI,
+    from app import (LABEL_SIZE, MAX_SUBTITLE, PRINTER_MODEL, PRINTER_URI, max_name,
                      create_label_image, get_active_subtitle)
 
     # While a session is running the printer belongs to it: the session token has to come along,
@@ -429,7 +429,7 @@ def print_label():
         return jsonify({"error": "session_token_invalid"}), 403
 
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()[:MAX_NAME]
+    name = (data.get("name") or "").strip()[:max_name()]
     # get_active_subtitle(), nicht get_default_subtitle(): Seit upstream f8c829c gilt der
     # zuletzt gesetzte Anlass fuer die ganze Laufzeit, und der Kiosk benutzt ihn. Bliebe hier
     # der .env-Vorgabewert stehen, truege ein ueber die API gedrucktes Schild den falschen

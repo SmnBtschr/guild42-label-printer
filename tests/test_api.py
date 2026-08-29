@@ -112,7 +112,7 @@ def test_name_ist_pflicht(umgebung):
 def test_name_wird_wie_im_kiosk_gekuerzt(umgebung):
     """Both paths must produce the same label — otherwise they drift apart.
 
-    Deliberately measured against ``app.MAX_NAME`` and not against a number written here: this
+    Deliberately measured against ``app.max_name()`` and not against a number written here: this
     test held the number 40 while the kiosk moved to 12 and then to 15, and it stayed green the
     whole time. A test that carries its own copy of the constraint proves the copy, not the
     constraint.
@@ -124,7 +124,7 @@ def test_name_wird_wie_im_kiosk_gekuerzt(umgebung):
     with mock.patch("brother_ql.backends.helpers.send"):
         antwort = client.post("/api/v1/print", json={"name": "A" * 100},
                               headers={"Authorization": f"Bearer {TOKEN}"})
-    assert len(antwort.get_json()["name"]) == kiosk.MAX_NAME
+    assert len(antwort.get_json()["name"]) == kiosk.max_name()
 
     # Gegenprobe ueber den Kiosk-Weg: beide kuerzen gleich, nicht nur beide irgendwie.
     with mock.patch("brother_ql.backends.helpers.send"):
