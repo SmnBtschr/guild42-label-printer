@@ -62,6 +62,38 @@ Brother QL-820NWBc prints label
 
 ---
 
+## Running as a container
+
+The same image serves both cases; **which one you get depends on whether a printer is attached**,
+not on a setting:
+
+```bash
+# Real printer (Raspberry Pi, Brother QL on USB)
+docker run -d --name label-printer -p 3020:5000 \
+  --device /dev/usb/lp0:/dev/usb/lp0 --group-add lp \
+  -v "$PWD/api_tokens.txt:/opt/printer/api_tokens.txt:ro" \
+  ghcr.io/plaintext-gmbh/guild42-label-printer:latest
+
+# Simulator (no device mapped) — same image, /sim shows the labels
+docker run -d --name label-printer-sim -p 3020:5000 \
+  ghcr.io/plaintext-gmbh/guild42-label-printer:latest
+```
+
+`docker-compose.example.yml` is the same thing as a compose file, with the device block marked
+for deletion. Two details worth knowing:
+
+- **`group_add: lp`** — on Debian and Raspberry Pi OS the device node belongs to group `lp`.
+  Without it the container sees the device but may not write to it, which looks exactly like a
+  jammed printer.
+- **The check happens once, at startup.** Unplug the printer during an event and the app keeps
+  reporting errors instead of quietly turning into a simulator that answers every badge with
+  `accepted` while nothing comes out.
+
+Overrides, both optional: `PRINTER_SIM=1` simulates despite a printer (dry runs at the desk),
+`PRINTER_SIM=0` forces the hardware path where the device node appears late, `PRINTER_URI` points
+at a different node, and `MAX_NAME` sets how many characters of the name are printed (1–40,
+default 15; longer names are cut, and the text scales down to the label width regardless).
+
 ## Installation
 
 ### 1. Install system dependencies
@@ -230,6 +262,208 @@ sudo journalctl -u cloudflared --no-pager -n 20
 
 **Wrong roll type on printer display**  
 Use genuine DK-22205 rolls only — sample rolls may not be recognised.
+
+---
+
+## REST API (optional)
+
+Besides the kiosk page, the printer can be triggered from another system — for example an event
+check-in that prints a badge as soon as someone signs in.
+
+**The API is off until you switch it on.** It only exists once an `api_tokens.txt` file is
+present; without that file every `/api/v1/...` route answers `404` and the application behaves
+exactly as it did before. Nothing about the kiosk page changes either way.
+
+### Switching it on
+
+```bash
+cd /opt/nametag                      # wherever the app lives
+cp api_tokens.txt.example api_tokens.txt
+
+# Create a token. It is shown ONCE - store it where the calling system can read it.
+python3 -c "import secrets,hashlib; t=secrets.token_urlsafe(32); \
+  print('token:', t); print('hash :', hashlib.sha256(t.encode()).hexdigest())"
+```
+
+Put the **hash** into `api_tokens.txt`, one token per line, with a label of your choosing:
+
+```
+checkin-desk:3f8a...c21b
+```
+
+The label never leaves the machine except in the log, where it lets you tell callers apart. The
+token itself is never written to disk and never logged.
+
+No restart is needed — the file is read per request.
+
+### Revoking a token
+
+Delete its line. It stops working with the next request; no restart, no downtime, and other
+tokens are unaffected. This is why each caller should get its own line.
+
+### Endpoints
+
+Both require `Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/print` | Print a badge. Body: `{"name": "Anna Muster", "subtitle": "Guild42.ch"}` — `subtitle` is optional and falls back to `DEFAULT_SUBTITLE` from `.env`. |
+| `GET` | `/api/v1/health` | Check whether the printer device can be opened, before promising a user anything. |
+| `POST` | `/api/v1/session` | **Onboarding** — claim the printer for one caller. Returns the session token once. |
+| `DELETE` | `/api/v1/session` | **Offboarding** — release it again. Requires the session token. |
+| `GET` | `/api/v1/session` | Is a session running, and how many badges has it printed? |
+| `POST` | `/api/v1/session/reset` | **Simulation only** — release a stuck session without its token. `404` on hardware. |
+
+```bash
+curl -X POST https://printer.example.ch/api/v1/print \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Anna Muster"}'
+```
+
+### Exclusive session (onboarding / offboarding)
+
+One caller can claim the printer, so that a running check-in desk is not disturbed by a second
+system printing into the same queue.
+
+```bash
+# Onboarding - the token comes back exactly once, keep it
+curl -X POST https://printer.example.ch/api/v1/session -H "Authorization: Bearer $TOKEN"
+# {"ok": true, "token": "5Jd...Qy"}
+
+# From now on every print carries it
+curl -X POST https://printer.example.ch/api/v1/print \
+  -H "Authorization: Bearer $TOKEN" -H "X-Session-Token: 5Jd...Qy" \
+  -H "Content-Type: application/json" -d '{"name": "Anna Muster"}'
+
+# Offboarding - only the holder of the session token can do this
+curl -X DELETE https://printer.example.ch/api/v1/session \
+  -H "Authorization: Bearer $TOKEN" -H "X-Session-Token: 5Jd...Qy"
+```
+
+You may supply your own token with `{"token": "..."}` (at least 16 characters) instead of letting
+the server generate one.
+
+Four properties, and the reasoning behind each:
+
+- **A second onboarding is refused with `409`, never silently overwritten.** Overwriting would be
+  the hijack this mechanism exists to prevent.
+- **Onboarding sits behind the normal token guard.** This device is reachable from any network by
+  design; an unauthenticated onboarding would mean whoever reaches the address first locks
+  everyone else out — with a trip to the Pi as the only remedy. The static token from
+  `api_tokens.txt` is the entry ticket, so there is no second authentication model.
+- **The session lives in memory and dies with the process.** There is no admin override and no
+  expiry: restarting the service is the way out of a forgotten session. That is also why it is
+  not written to a file — a file would survive exactly the restart that is supposed to clear it.
+- **Without a session nothing changes.** Callers with a static token print as before; exclusivity
+  begins with the first onboarding.
+
+The kiosk page shows a small line while a session is connected, including how many badges it has
+printed. It is display only — there are no controls, and the session token is never shown.
+
+##### The one exception: a reset in the simulator
+
+`POST /api/v1/session/reset` releases a running session **without** its token, and the `/sim` page
+carries a *Release channel* button that does the same. Both exist **only in simulation**;
+on a machine with a printer they answer `404` like any unknown path, so the rule above is untouched where it
+matters.
+
+The reason for the exception is that the third property costs something quite different in the two
+places. On the Pi, "restart the service" is a deliberate hurdle standing next to the person who
+owns the printer. On the simulator it is a container in a rack: the channel of `printer-int` was
+held from 21. to 29.08.2026 by a caller whose token no longer existed anywhere, and the guild
+settings page could only advise to "release it at the device". Whoever tests check-in then needs
+NAS access to restart a container — for a test system that is the wrong price for a rule that
+protects nothing there. There is no device in simulation, no roll of labels, and a second caller
+can at worst overwrite a PNG in a bounded in-memory buffer.
+
+The API route stays behind the normal token guard; simulation is not the same as public. The
+button on `/sim` carries no token, like the rest of that page — which already shows the printed
+labels themselves, names included.
+
+#### Signed session tokens (optional) — surviving a restart of the caller
+
+The four properties above have one hard edge: the holder is recognised by the **hash of a value**,
+so it has to remember that value. A caller that is redeployed daily cannot. Guild42's check-in
+system loses its token on every deploy — from then on every print and even the offboarding answers
+`403`, and the only documented remedy is a restart of this Pi.
+
+If the caller brings a **signed token** instead, the session remembers *who* opened it rather than
+only *what* was handed over, and the same holder may take it over with a fresh token:
+
+```ini
+# .env — all three are optional; without SESSION_JWKS_URL nothing changes
+SESSION_JWKS_URL=https://app.guild42.ch/.well-known/jwks.json
+SESSION_JWT_ISSUER=https://app.guild42.ch
+SESSION_JWT_AUDIENCE=guild42-label-printer
+```
+
+The token must be a `RS256` JWT signed by a key published at `SESSION_JWKS_URL`, carrying `sub`,
+`exp` and the expected `aud`/`iss`. Identity is `iss` + `sub`: the same identity resumes the
+running session (`200` with `"resumed": true`, print counter preserved), everything else keeps
+getting `409`.
+
+Deliberate limits:
+
+- **The key set address is configured here, never taken from the token.** Reading `iss` and
+  fetching keys from wherever it points would let the caller decide who is trusted.
+- **A session opened with a static token has no identity** and cannot be taken over by any
+  signature — only the value counts, exactly as before.
+- **`exp` is required.** A token without expiry would be an eternal one, and this one travels as an
+  HTTP header.
+- **Only `RS256`.** A header claiming another algorithm is refused even when the RSA signature is
+  valid (`none` and HMAC are the alg-confusion attack).
+- **An unreachable issuer costs the takeover, not the operation.** The running session keeps
+  printing with the token it already knows.
+
+No new dependency: verification is a modular exponentiation plus a byte comparison from the
+standard library.
+
+### What a success response does and does not mean
+
+```json
+{"ok": true, "accepted": true, "name": "Anna Muster"}
+```
+
+**`accepted`, not `printed`.** The response means the raster was handed to the printer and the
+device took it. Whether a label actually came out — paper left on the roll, no jam, label not
+peeled off — cannot be observed from here, and claiming otherwise would make callers report
+something to their users that may not be true.
+
+| Status | Meaning |
+|---|---|
+| `400` | `name` missing or empty |
+| `401` | token missing, malformed or unknown (no further detail, on purpose) |
+| `403` | a session is running and the `X-Session-Token` is missing or wrong |
+| `404` | the API is not enabled on this installation (no token file) |
+| `409` | onboarding refused — a session is already running (and the caller did not prove the same signed identity) |
+| `429` | rate limit reached |
+| `503` | printer device missing or not openable |
+| `500` | printing failed for another reason — details are in the log, not in the response |
+
+### Rate limits
+
+Printing costs material, so `/api/v1/print` is limited. Defaults are `10/minute` per token and
+`30/minute` overall; both can be changed in `.env`:
+
+```
+API_RATE_LIMIT=10/minute
+API_RATE_LIMIT_GLOBAL=30/minute
+API_TOKENS_FILE=/etc/nametag/api_tokens.txt   # optional, defaults to the app directory
+```
+
+The limits need `Flask-Limiter` (added to `requirements.txt`). The kiosk route `/print` is
+deliberately left unlimited so the existing behaviour is unchanged — add a limit there too if your
+installation is reachable from outside.
+
+### Tests
+
+```bash
+pip install pytest
+python3 -m pytest tests/
+```
+
+They mock the printer backend and never touch a real device, so they run anywhere.
 
 ---
 

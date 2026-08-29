@@ -1,0 +1,54 @@
+# Label printer as a container — copy to docker-compose.yml and adjust.
+#
+# REAL PRINTER OR SIMULATOR IS NOT A SETTING: whether this container prints or simulates depends
+# on the `devices:` entry below. Mapped in, it drives the Brother QL exactly like the Raspberry
+# Pi does; left out, the same image serves the animated simulator at /sim. Nothing to flip on
+# either side, so nothing can be forgotten on one of them.
+#
+# The device is checked once at startup and then remembered. Unplugging the printer during an
+# event therefore yields honest errors instead of a container that quietly turns into a
+# simulator and answers every badge with "accepted".
+
+services:
+  label-printer:
+    image: ghcr.io/plaintext-gmbh/guild42-label-printer:latest
+    container_name: label-printer
+    restart: unless-stopped
+    ports:
+      - "3020:5000"
+
+    # ---- Real printer: keep this block. Simulator: delete it. -------------------------------
+    devices:
+      # Left of the colon is the host, right of it the path inside the container. The name must
+      # stay /dev/usb/lp0 inside unless PRINTER_URI says otherwise.
+      - "/dev/usb/lp0:/dev/usb/lp0"
+    # The device node belongs to group "lp" on Debian/Raspberry Pi OS. Without this the container
+    # user sees the device but may not write to it — which looks exactly like a jammed printer.
+    group_add:
+      - "lp"
+    # ----------------------------------------------------------------------------------------
+
+    volumes:
+      # REST API: one bearer token per line ("<sha256> <label>"), see api_tokens.txt.example.
+      # No file, no API — every /api/v1/* route answers 404 instead of 401.
+      - ./api_tokens.txt:/opt/printer/api_tokens.txt:ro
+      # Optional: DEFAULT_SUBTITLE=... for the line under the name.
+      - ./.env:/opt/printer/.env:ro
+
+    environment:
+      # Both optional.
+      # PRINTER_SIM: "1" forces the simulator even with a printer attached (dry runs at the
+      #              desk), "0" forces the hardware path where the device node appears late.
+      #              Unset — the normal case — lets the device decide.
+      # PRINTER_URI: a different device node, e.g. /dev/usb/lp1 with two printers on one host.
+      # MAX_NAME:    characters printed from the name (1..40, default 15). Longer names are cut;
+      #              the text scales down to the label width either way.
+      - MAX_NAME=15
+      # - PRINTER_SIM=1
+      # - PRINTER_URI=/dev/usb/lp0
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/session-status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -5,3 +5,6 @@ __pycache__/
 *.log
 *.png
 .DS_Store
+api_tokens.txt
+.venv/
+__pycache__/
