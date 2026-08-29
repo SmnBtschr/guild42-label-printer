@@ -57,9 +57,10 @@ SUBTITLES = [
     'Workshop-Tage.ch',
 ]
 
+RUNTIME_FILE = os.path.join(os.path.dirname(__file__), 'runtime.txt')
 
-def get_default_subtitle() -> str:
-    """Read the default subtitle from .env file."""
+
+def get_default_subtitle():
     try:
         env_path = os.path.join(os.path.dirname(__file__), '.env')
         with open(env_path) as f:
@@ -71,36 +72,69 @@ def get_default_subtitle() -> str:
     return 'Guild42.ch'
 
 
-def create_label_image(name: str, subtitle: str = 'Guild42.ch') -> Image.Image:
-    """Render a 62mm label image (696x271px @ 300dpi)."""
+def get_active_subtitle():
+    try:
+        with open(RUNTIME_FILE) as f:
+            value = f.read().strip()
+            if value in SUBTITLES:
+                return value
+    except Exception:
+        pass
+    return get_default_subtitle()
+
+
+def set_active_subtitle(subtitle):
+    with open(RUNTIME_FILE, 'w') as f:
+        f.write(subtitle)
+
+
+def create_label_image(name, subtitle='Guild42.ch'):
     W, H = 696, 271
     img = Image.new('RGB', (W, H), 'white')
     draw = ImageDraw.Draw(img)
-
     try:
-        font_name = ImageFont.truetype(
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 80)
-        font_sub = ImageFont.truetype(
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 40)
+        font_name = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 80)
+        font_sub = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 40)
     except Exception:
         font_name = ImageFont.load_default()
         font_sub = font_name
-
-    # Decorative top stripe
     draw.rectangle([0, 0, W, 18], fill='#1a1a2e')
-
-    # Name and subtitle centred
     draw.text((W // 2, 120), name, font=font_name, fill='black', anchor='mm')
     draw.text((W // 2, 210), subtitle, font=font_sub, fill='#555555', anchor='mm')
-
     return img
+
+
+# Label limits. They live HERE because they are a rendering constraint, not a transport one: one
+# line, 80px font, 696px of label. api.py imports them instead of keeping its own copy — the two
+# paths must not be able to produce labels the other cannot.
+#
+# WHY THIS IS NOT A COSMETIC REFACTOR: until now both files carried the number. When the kiosk went
+# 40 -> 12 -> 15, api.py kept 40 and nothing said a word — a name printed through the API overflowed
+# the paper while the same name was refused at the kiosk. One constant cannot drift from itself.
+MAX_NAME = 15
+MAX_SUBTITLE = 50
 
 
 @app.route('/')
 def index():
-    default = get_default_subtitle()
-    return render_template('index.html', default_subtitle=default, subtitles=SUBTITLES,
+    # get_active_subtitle() statt get_default_subtitle(): der zuletzt gesetzte Anlass gilt fuer die
+    # ganze Laufzeit (upstream f8c829c). sim= bleibt daneben stehen, das eine sagt WELCHER Anlass,
+    # das andere WOHIN gedruckt wird.
+    return render_template('index.html',
+                           default_subtitle=get_active_subtitle(),
+                           subtitles=SUBTITLES,
+                           max_name=MAX_NAME,
                            sim=sim_enabled())
+
+
+@app.route('/set-event', methods=['POST'])
+def set_event():
+    data = request.get_json()
+    subtitle = data.get('subtitle', '').strip()
+    if subtitle not in SUBTITLES:
+        return jsonify({'error': 'Invalid subtitle'}), 400
+    set_active_subtitle(subtitle)
+    return jsonify({'ok': True, 'active': subtitle})
 
 
 @app.route('/session-status')
@@ -128,12 +162,10 @@ def session_status():
 @app.route('/print', methods=['POST'])
 def print_label():
     data = request.get_json()
-    name = (data.get('name') or '').strip()[:40]
-    subtitle = (data.get('subtitle') or get_default_subtitle()).strip()[:50]
-
+    name = (data.get('name') or '').strip()[:MAX_NAME]
+    subtitle = (data.get('subtitle') or get_active_subtitle()).strip()[:MAX_SUBTITLE]
     if not name:
         return jsonify({'error': 'Name is required'}), 400
-
     try:
         img = create_label_image(name, subtitle)
         if sim_enabled():
@@ -144,11 +176,9 @@ def print_label():
         qlr = BrotherQLRaster(PRINTER_MODEL)
         qlr.exception_on_warning = False
         convert(qlr=qlr, images=[img], label=LABEL_SIZE, rotate='auto', dpi_600=False)
-        send(
-            instructions=qlr.data,
-            printer_identifier=PRINTER_URI,
-            backend_identifier='linux_kernel',
-        )
+        send(instructions=qlr.data,
+             printer_identifier=PRINTER_URI,
+             backend_identifier='linux_kernel')
         return jsonify({'ok': True, 'name': name})
     except Exception as e:
         # The exception text can contain device paths and internals; it goes to the log, not to

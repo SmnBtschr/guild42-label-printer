@@ -115,10 +115,11 @@ def _session_matches() -> bool:
         return False
     return _selbe_identitaet(_ausweis(presented), gespeichert)
 
-# Same limits as the web UI in app.py — the API must not be able to produce labels the kiosk
-# cannot, otherwise the two paths drift apart.
-MAX_NAME = 40
-MAX_SUBTITLE = 50
+# The label limits are NOT repeated here. They belong to the rendering and live in app.py; this
+# module imports them where it needs them (see print_label). The duplicate that used to sit here
+# is the reason for the rule: the kiosk went 40 -> 12 -> 15 upstream and this copy stayed at 40,
+# so the API printed names the kiosk refused and the label overflowed. A copy of a constraint is
+# a constraint that will be wrong one day.
 
 
 def _env(key: str, default: str = "") -> str:
@@ -413,7 +414,8 @@ def print_label():
 
     Returns ``accepted``, never ``printed`` — see the module docstring.
     """
-    from app import LABEL_SIZE, PRINTER_MODEL, PRINTER_URI, create_label_image, get_default_subtitle
+    from app import (LABEL_SIZE, MAX_NAME, MAX_SUBTITLE, PRINTER_MODEL, PRINTER_URI,
+                     create_label_image, get_active_subtitle)
 
     # While a session is running the printer belongs to it: the session token has to come along,
     # in X-Session-Token. Without a session nothing changes - callers with a static token print
@@ -428,7 +430,11 @@ def print_label():
 
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()[:MAX_NAME]
-    subtitle = (data.get("subtitle") or get_default_subtitle()).strip()[:MAX_SUBTITLE]
+    # get_active_subtitle(), nicht get_default_subtitle(): Seit upstream f8c829c gilt der
+    # zuletzt gesetzte Anlass fuer die ganze Laufzeit, und der Kiosk benutzt ihn. Bliebe hier
+    # der .env-Vorgabewert stehen, truege ein ueber die API gedrucktes Schild den falschen
+    # Anlass — und das sind bei guild42 gerade die Schilder vom Check-in.
+    subtitle = (data.get("subtitle") or get_active_subtitle()).strip()[:MAX_SUBTITLE]
     if not name:
         return jsonify({"error": "name_required"}), 400
 
