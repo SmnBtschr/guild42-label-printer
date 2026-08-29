@@ -122,6 +122,18 @@
   .box img { width: 100%; border-radius: 4px; box-shadow: 0 24px 70px rgba(0,0,0,.7);
              background: #fff; }
   .box figcaption { color: var(--dim); font-size: .8rem; margin-top: 10px; }
+
+  /* Channel panel: the exclusive session is invisible until it blocks someone. On the
+     simulator that block has no purpose, so it is shown and can be lifted right here. */
+  .channel { display: flex; align-items: center; gap: 12px; margin: -10px 0 24px;
+             padding: 10px 16px; border-radius: 999px; background: var(--bg2);
+             border: 1px solid #00000055; font-size: .82rem; color: var(--dim); }
+  .channel .state { color: var(--ink); }
+  .channel button { font: inherit; color: var(--ink); background: var(--body-hi);
+                    border: 1px solid #00000066; border-radius: 999px; padding: 5px 14px;
+                    cursor: pointer; }
+  .channel button:hover:enabled { background: var(--accent); }
+  .channel button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
@@ -130,6 +142,12 @@
     <p class="sub"><span class="dot" id="conn"></span><b id="count">0</b> labels printed —
        prints from the kiosk and the REST API appear here live</p>
   </header>
+
+  <div class="channel" id="channel">
+    <span>Exclusive channel:</span>
+    <span class="state" id="chanState">checking…</span>
+    <button id="chanReset" type="button" disabled>Release channel</button>
+  </div>
 
   <div class="scene">
     <div class="printer" id="printer">
@@ -230,8 +248,42 @@
       .catch(function () { document.getElementById('conn').classList.add('off'); });
   }
 
+  /* The channel panel. Kept apart from the print polling on purpose: a stuck session is
+     exactly the case in which nothing is being printed, so it must not depend on that loop. */
+  var chanState = document.getElementById('chanState');
+  var chanReset = document.getElementById('chanReset');
+
+  function zeigeKanal(d) {
+    if (d && d.connected) {
+      var seit = d.since ? new Date(d.since * 1000).toLocaleString() : '';
+      chanState.textContent = 'reserved' + (seit ? ' since ' + seit : '') +
+                              ' — ' + (d.prints || 0) + ' printed';
+      chanReset.disabled = false;
+    } else {
+      chanState.textContent = 'free';
+      chanReset.disabled = true;
+    }
+  }
+
+  function pollKanal() {
+    fetch('/sim/session')
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(zeigeKanal)
+      .catch(function () { chanState.textContent = 'unknown'; chanReset.disabled = true; });
+  }
+
+  chanReset.addEventListener('click', function () {
+    chanReset.disabled = true;
+    fetch('/sim/session/reset', { method: 'POST' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function () { pollKanal(); })
+      .catch(function () { chanState.textContent = 'release failed'; });
+  });
+
   poll();
   setInterval(poll, 1200);
+  pollKanal();
+  setInterval(pollKanal, 3000);
 </script>
 </body>
 </html>

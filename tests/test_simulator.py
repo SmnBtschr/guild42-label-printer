@@ -30,6 +30,36 @@ def test_sim_disabled_hides_routes(client, monkeypatch):
     assert client.get("/sim").status_code == 404
     assert client.get("/sim/prints").status_code == 404
     assert client.get("/sim/label/1.png").status_code == 404
+    # Der Kanal-Reset gehoert dazu: Er darf auf einem Geraet nicht einmal existieren.
+    assert client.get("/sim/session").status_code == 404
+    assert client.post("/sim/session/reset").status_code == 404
+
+
+def test_kanal_reset_auf_der_sim_seite(client):
+    """The button on /sim releases a stuck channel — the point of the whole addition.
+
+    Why it matters: the session lives in memory and the documented way out is a restart of the
+    process. On the Pi that is a deliberate hurdle. On a container in a rack it means whoever
+    tests check-in needs NAS access, and printer-int sat blocked from 21. to 29.08.2026 for
+    exactly that reason.
+    """
+    import api
+    api._session = {"digest": "egal", "started": 0, "prints": 3, "identity": None}
+
+    zustand = client.get("/sim/session").get_json()
+    assert zustand["connected"] is True and zustand["prints"] == 3
+
+    antwort = client.post("/sim/session/reset")
+    assert antwort.status_code == 200
+    assert antwort.get_json() == {"ok": True, "released": True, "prints": 3}
+    assert client.get("/sim/session").get_json()["connected"] is False
+
+
+def test_kanal_reset_ohne_sitzung_meldet_frei(client):
+    import api
+    api._session = None
+    assert client.post("/sim/session/reset").get_json() == {"ok": True, "released": False,
+                                                            "prints": 0}
 
 
 def test_kiosk_print_lands_in_simulator(client):

@@ -262,6 +262,7 @@ Both require `Authorization: Bearer <token>`.
 | `POST` | `/api/v1/session` | **Onboarding** — claim the printer for one caller. Returns the session token once. |
 | `DELETE` | `/api/v1/session` | **Offboarding** — release it again. Requires the session token. |
 | `GET` | `/api/v1/session` | Is a session running, and how many badges has it printed? |
+| `POST` | `/api/v1/session/reset` | **Simulation only** — release a stuck session without its token. `404` on hardware. |
 
 ```bash
 curl -X POST https://printer.example.ch/api/v1/print \
@@ -309,6 +310,26 @@ Four properties, and the reasoning behind each:
 
 The kiosk page shows a small line while a session is connected, including how many badges it has
 printed. It is display only — there are no controls, and the session token is never shown.
+
+##### The one exception: a reset in the simulator
+
+`POST /api/v1/session/reset` releases a running session **without** its token, and the `/sim` page
+carries a *Release channel* button that does the same. Both exist **only under `PRINTER_SIM=1`**;
+on hardware they answer `404` like any unknown path, so the rule above is untouched where it
+matters.
+
+The reason for the exception is that the third property costs something quite different in the two
+places. On the Pi, "restart the service" is a deliberate hurdle standing next to the person who
+owns the printer. On the simulator it is a container in a rack: the channel of `printer-int` was
+held from 21. to 29.08.2026 by a caller whose token no longer existed anywhere, and the guild
+settings page could only advise to "release it at the device". Whoever tests check-in then needs
+NAS access to restart a container — for a test system that is the wrong price for a rule that
+protects nothing there. There is no device in simulation, no roll of labels, and a second caller
+can at worst overwrite a PNG in a bounded in-memory buffer.
+
+The API route stays behind the normal token guard; simulation is not the same as public. The
+button on `/sim` carries no token, like the rest of that page — which already shows the printed
+labels themselves, names included.
 
 #### Signed session tokens (optional) — surviving a restart of the caller
 

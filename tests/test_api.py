@@ -282,6 +282,60 @@ def test_offboarding_nur_mit_dem_session_token(umgebung):
     assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is True
 
 
+def test_reset_gibt_es_auf_hardware_nicht(umgebung):
+    """The rejected admin override must not sneak in through the back door.
+
+    Without PRINTER_SIM the route answers 404 like an unknown path — not 403, which would admit
+    it exists — and the running session is untouched afterwards.
+    """
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    antwort = client.post("/api/v1/session/reset", headers=KOPF)
+    assert antwort.status_code == 404
+    assert antwort.get_json() == {"error": "not_found"}
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is True
+
+
+def test_reset_gibt_den_kanal_in_der_simulation_frei(umgebung, monkeypatch):
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    monkeypatch.setenv("PRINTER_SIM", "1")
+
+    antwort = client.post("/api/v1/session/reset", headers=KOPF)
+
+    assert antwort.status_code == 200
+    assert antwort.get_json()["released"] is True
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is False
+    # Und danach ist der Kanal wirklich frei, nicht nur laut Auskunft.
+    zweite, _ = _onboard(client)
+    assert zweite.status_code == 201
+
+
+def test_reset_ohne_laufende_sitzung_ist_kein_fehler(umgebung, monkeypatch):
+    """"The channel is free" is what the caller wanted — a 404 would send them hunting."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    monkeypatch.setenv("PRINTER_SIM", "1")
+
+    antwort = client.post("/api/v1/session/reset", headers=KOPF)
+
+    assert antwort.status_code == 200
+    assert antwort.get_json() == {"ok": True, "released": False}
+
+
+def test_reset_braucht_trotz_simulation_einen_token(umgebung, monkeypatch):
+    """Simulation is not the same as public: the blueprint guard still applies."""
+    client, tokens, _ = umgebung
+    _mit_token(tokens)
+    _onboard(client)
+    monkeypatch.setenv("PRINTER_SIM", "1")
+
+    assert client.post("/api/v1/session/reset").status_code == 401
+    assert client.get("/api/v1/session", headers=KOPF).get_json()["connected"] is True
+
+
 def test_druckzaehler_zaehlt_nur_angenommene_drucke(umgebung):
     client, tokens, drucker = umgebung
     _mit_token(tokens)

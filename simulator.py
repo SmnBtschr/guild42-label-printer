@@ -84,6 +84,42 @@ def sim_prints():
     return jsonify({"prints": fresh, "latest": total})
 
 
+@sim_bp.get("/session")
+def sim_session():
+    """State of the exclusive channel, for the panel on the page.
+
+    The same numbers ``GET /api/v1/session`` returns, but without a token: this page is already
+    unauthenticated and shows the printed labels themselves. Withholding "a session is running"
+    from someone who can read the names on the labels would protect nothing.
+    """
+    if not sim_enabled():
+        abort(404)
+    from api import session_status
+    return jsonify(session_status())
+
+
+@sim_bp.post("/session/reset")
+def sim_session_reset():
+    """Release the channel from the simulator page.
+
+    WHY THIS BUTTON IS HERE AND NOT ONLY IN THE API. The stuck channel is discovered by whoever
+    is testing — at the guild settings page or here — and until now their only remedy was a
+    restart of this container, which needs NAS access. The people who test check-in are not the
+    people with a shell on the NAS. A remedy that only the operator can apply is, for a test
+    system, no remedy.
+
+    It carries no token, like the rest of this blueprint, and that is defensible for exactly the
+    same reason: it exists only under ``PRINTER_SIM=1``, where there is no device to protect. On
+    hardware ``sim_enabled()`` is false and this route answers 404 like any unknown path.
+    """
+    if not sim_enabled():
+        abort(404)
+    from api import force_release
+    freigegeben = force_release()
+    return jsonify({"ok": True, "released": freigegeben is not None,
+                    "prints": (freigegeben or {}).get("prints", 0)})
+
+
 @sim_bp.get("/label/<int:print_id>.png")
 def sim_label(print_id: int):
     if not sim_enabled():
