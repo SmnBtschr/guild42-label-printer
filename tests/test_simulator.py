@@ -95,6 +95,28 @@ def test_label_is_never_cached(client):
     assert "max-age=31536000" not in steuerung
 
 
+def test_label_url_is_unique_per_run(client):
+    """The id alone is not a unique address: it restarts at 1 with the process.
+
+    Daniel, 29.08.2026: a freshly printed label showed up in the tray with the right footer
+    (#2, 15:59:41) and the picture of a test label printed two weeks earlier — the browser still
+    had /sim/label/2.png from that older run. Headers alone cannot repair a cache entry that is
+    already there, so every print carries a run token and the page puts it into the URL.
+    """
+    import simulator
+
+    client.post("/print", json={"name": "Lauf"})
+    eintrag = client.get("/sim/prints").get_json()["prints"][0]
+
+    assert eintrag["run"] == simulator._RUN
+    assert eintrag["run"], "leerer Run-Token — die Adresse waere wieder nur die id"
+    # GEGENPROBE: ein neuer Prozess erzeugt einen anderen Token, sonst bringt er nichts.
+    assert simulator.os.urandom(4).hex() != simulator._RUN
+    # und die Seite baut die Adresse auch wirklich damit
+    seite = client.get("/sim").data
+    assert b"labelUrl" in seite and b"p.run" in seite
+
+
 def test_label_belongs_to_its_id(client):
     """Two prints, two different images — the id must select, not the order of the request."""
     client.post("/print", json={"name": "Erste"})

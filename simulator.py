@@ -31,6 +31,15 @@ _prints = []          # newest last: {"id", "name", "subtitle", "source", "ts", 
 _ids = itertools.count(1)
 MAX_PRINTS = 50       # ~50 labels x ~10 KB PNG — bounded by design
 
+# WHY A RUN TOKEN: print ids restart at 1 with the process, so ``/sim/label/2.png`` stands for a
+# different label after every restart. The no-store headers below fixed what the CDN made of
+# that; they cannot fix what a browser already holds from an earlier run. Measured 29.08.2026 on
+# printer-int.guild42.ch: a fresh print showed up with the correct footer (#2, 15:59:41) and the
+# PICTURE of a test label printed two weeks earlier under the same id. The token goes into the
+# image URL, so a new run asks for genuinely new addresses instead of hoping nobody cached the
+# old ones.
+_RUN = os.urandom(4).hex()
+
 
 def sim_enabled() -> bool:
     """``PRINTER_SIM=1`` switches the hardware path off. Read per call, like ``.env`` values
@@ -57,7 +66,9 @@ def record_print(image, name: str, subtitle: str, source: str) -> int:
 
 
 def _public(entry: dict) -> dict:
-    return {k: entry[k] for k in ("id", "name", "subtitle", "source", "ts")}
+    public = {k: entry[k] for k in ("id", "name", "subtitle", "source", "ts")}
+    public["run"] = _RUN
+    return public
 
 
 @sim_bp.get("")

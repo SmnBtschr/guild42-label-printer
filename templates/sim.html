@@ -185,16 +185,20 @@
 
   function setCount(n) { document.getElementById('count').textContent = n; }
 
+  /* Run token + timestamp in the address: ids restart at 1 with the container, and a browser
+     that still has label #2 of an earlier run would otherwise show that old picture. */
+  function labelUrl(p) { return '/sim/label/' + p.id + '.png?v=' + p.run + '-' + p.ts; }
+
   function trayAdd(p) {
     var empty = document.getElementById('empty');
     if (empty) empty.remove();
     var b = document.createElement('button');
     b.className = 'card';
-    b.innerHTML = '<img src="/sim/label/' + p.id + '.png" alt="Label ' + p.id + '">' +
+    b.innerHTML = '<img src="' + labelUrl(p) + '" alt="Label ' + p.id + '">' +
       '<span class="meta"><span>#' + p.id + ' · ' + p.source + '</span><span>' +
       new Date(p.ts * 1000).toLocaleTimeString() + '</span></span>';
     b.onclick = function () {
-      document.getElementById('boxImg').src = '/sim/label/' + p.id + '.png';
+      document.getElementById('boxImg').src = labelUrl(p);
       document.getElementById('boxCap').textContent =
         '#' + p.id + ' — printed ' + new Date(p.ts * 1000).toLocaleString() +
         ' via ' + p.source;
@@ -207,7 +211,7 @@
   function animate(p) {
     animating = true;
     printer.classList.add('working');
-    outImg.src = '/sim/label/' + p.id + '.png';
+    outImg.src = labelUrl(p);
     guide.classList.remove('tear');
     /* restart the CSS animation reliably */
     guide.classList.remove('feeding');
