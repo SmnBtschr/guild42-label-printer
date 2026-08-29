@@ -34,7 +34,7 @@ try:
 except ImportError:  # api.py removed or dependencies missing - the kiosk keeps working
     pass
 
-# Optional printer simulator (simulator.py). Enabled only with PRINTER_SIM=1 — an installation
+# Optional printer simulator (simulator.py). Active when no printer is attached — an installation
 # next to real hardware is byte-for-byte unaffected, the /sim routes then answer 404.
 try:
     from simulator import sim_bp, sim_enabled, record_print
@@ -48,8 +48,26 @@ except ImportError:  # simulator.py absent - hardware-only installation, as befo
         raise RuntimeError('simulator not available')
 
 PRINTER_MODEL = 'QL-820NWB'
-PRINTER_URI   = '/dev/usb/lp0'
+PRINTER_URI   = os.environ.get('PRINTER_URI', '/dev/usb/lp0')
 LABEL_SIZE    = '62'
+
+_hardware_da = None
+
+
+def hardware_vorhanden(neu_pruefen: bool = False) -> bool:
+    """Is there a real printer on this machine? Decided by the device node being there.
+
+    CHECKED ONCE, AT STARTUP, AND THEN REMEMBERED — and that is the whole point of the flag.
+    Checking per print would look more current and would be a trap: unplug the printer during an
+    event and every following badge would quietly go to the simulator, with ``accepted`` in the
+    response and nothing on paper. A machine that started with a printer stays a printing
+    machine and reports an error when the device is gone. Being wrong loudly beats being wrong
+    silently at a check-in desk.
+    """
+    global _hardware_da
+    if _hardware_da is None or neu_pruefen:
+        _hardware_da = os.path.exists(PRINTER_URI)
+    return _hardware_da
 
 SUBTITLES = [
     'Guild42.ch',

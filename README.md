@@ -62,6 +62,38 @@ Brother QL-820NWBc prints label
 
 ---
 
+## Running as a container
+
+The same image serves both cases; **which one you get depends on whether a printer is attached**,
+not on a setting:
+
+```bash
+# Real printer (Raspberry Pi, Brother QL on USB)
+docker run -d --name label-printer -p 3020:5000 \
+  --device /dev/usb/lp0:/dev/usb/lp0 --group-add lp \
+  -v "$PWD/api_tokens.txt:/opt/printer/api_tokens.txt:ro" \
+  ghcr.io/plaintext-gmbh/guild42-label-printer:latest
+
+# Simulator (no device mapped) — same image, /sim shows the labels
+docker run -d --name label-printer-sim -p 3020:5000 \
+  ghcr.io/plaintext-gmbh/guild42-label-printer:latest
+```
+
+`docker-compose.example.yml` is the same thing as a compose file, with the device block marked
+for deletion. Two details worth knowing:
+
+- **`group_add: lp`** — on Debian and Raspberry Pi OS the device node belongs to group `lp`.
+  Without it the container sees the device but may not write to it, which looks exactly like a
+  jammed printer.
+- **The check happens once, at startup.** Unplug the printer during an event and the app keeps
+  reporting errors instead of quietly turning into a simulator that answers every badge with
+  `accepted` while nothing comes out.
+
+Overrides, both optional: `PRINTER_SIM=1` simulates despite a printer (dry runs at the desk),
+`PRINTER_SIM=0` forces the hardware path where the device node appears late, `PRINTER_URI` points
+at a different node, and `MAX_NAME` sets how many characters of the name are printed (1–40,
+default 15; longer names are cut, and the text scales down to the label width regardless).
+
 ## Installation
 
 ### 1. Install system dependencies
@@ -332,8 +364,8 @@ printed. It is display only — there are no controls, and the session token is 
 ##### The one exception: a reset in the simulator
 
 `POST /api/v1/session/reset` releases a running session **without** its token, and the `/sim` page
-carries a *Release channel* button that does the same. Both exist **only under `PRINTER_SIM=1`**;
-on hardware they answer `404` like any unknown path, so the rule above is untouched where it
+carries a *Release channel* button that does the same. Both exist **only in simulation**;
+on a machine with a printer they answer `404` like any unknown path, so the rule above is untouched where it
 matters.
 
 The reason for the exception is that the third property costs something quite different in the two

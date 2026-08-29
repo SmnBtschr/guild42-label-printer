@@ -42,9 +42,27 @@ _RUN = os.urandom(4).hex()
 
 
 def sim_enabled() -> bool:
-    """``PRINTER_SIM=1`` switches the hardware path off. Read per call, like ``.env`` values
-    elsewhere in this project — no restart semantics to explain."""
-    return os.environ.get("PRINTER_SIM", "") == "1"
+    """Simulator or hardware — decided by whether a printer is actually attached.
+
+    THE DEVICE DECIDES (Daniel, 29.08.2026: "die unterscheidung ob echt oder sim ist genau das
+    vorhandensein des druckers"). No flag to forget on either side: a Pi with the printer plugged
+    in prints, a container without the device simulates. Before this, a container started without
+    ``PRINTER_SIM=1`` answered every print with a 503 that read like a broken printer, and a Pi
+    started *with* it silently swallowed every badge.
+
+    ``PRINTER_SIM`` remains as a deliberate override in both directions — ``1`` forces the
+    simulator on a machine that has a printer (dry runs at the desk), ``0`` forces the hardware
+    path where the device node appears late. Anything else, including unset, lets the device
+    decide.
+    """
+    ausdruecklich = os.environ.get("PRINTER_SIM", "").strip()
+    if ausdruecklich == "1":
+        return True
+    if ausdruecklich == "0":
+        return False
+    # Spaeter Import: app.py laedt dieses Modul beim Start, andersherum wuerde das ein Zirkel.
+    from app import hardware_vorhanden
+    return not hardware_vorhanden()
 
 
 def record_print(image, name: str, subtitle: str, source: str) -> int:
