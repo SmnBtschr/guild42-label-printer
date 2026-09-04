@@ -22,7 +22,7 @@ The system must:
 - Be operable by any attendee without instructions
 - Print a legible 62mm label within 5 seconds of submission
 - Survive a full event (several hours) without manual intervention
-- Support multiple event brands (Guild42.ch, CH-Open.ch, Workshop-Tage.ch)
+- Support multiple event brands (Guild42.ch, CH-Open.ch, Workshoptage.ch)
 - Allow the active event to be switched by an operator with a single command
 - Be accessible from any mobile network via a public HTTPS URL
 
@@ -40,11 +40,11 @@ The system must:
 
 | Role | Name / Group | Expectation |
 |------|-------------|-------------|
-| Event attendee | Guild42 / CH-Open / Workshop-Tage participants | Self-service badge printing without friction |
+| Event attendee | Guild42 / CH-Open / Workshoptage participants | Self-service badge printing without friction |
 | Event operator | Guild42 board (Simon) | Reliable system, simple event switching |
 | Hardware sponsor (printer) | Zooey.ch | System makes good use of donated hardware |
 | Hardware owner (dongle+SIM) | Guild42.ch | 4G connectivity independent of venue WiFi |
-| Community events | CH-Open.ch, Workshop-Tage.ch | Reusable by other Swiss tech community events |
+| Community events | CH-Open.ch, Workshoptage.ch | Reusable by other Swiss tech community events |
 
 ---
 
@@ -67,7 +67,7 @@ The system must:
 | Constraint | Background |
 |-----------|-----------|
 | Volunteer-run | No paid operations staff; system must be self-managing |
-| Shared across events | Guild42.ch lends the hardware to CH-Open and Workshop-Tage |
+| Shared across events | Guild42.ch lends the hardware to CH-Open and Workshoptage |
 | Open source | Code published on GitHub for community reuse |
 
 ### 2.3 Conventions
@@ -383,7 +383,7 @@ echo "DEFAULT_SUBTITLE=CH-Open.ch" > ~/nametag/.env
 sudo systemctl restart nametag
 ```
 
-Available values: `Guild42.ch`, `CH-Open.ch`, `Workshop-Tage.ch`
+Available values: `Guild42.ch`, `CH-Open.ch`, `Workshoptage.ch`
 
 ### 8.3 Network / Tunnel
 

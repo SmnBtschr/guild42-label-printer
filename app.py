@@ -14,7 +14,7 @@ LABEL_SIZE    = '62'
 SUBTITLES = [
     'Guild42.ch',
     'CH-Open.ch',
-    'Workshop-Tage.ch',
+    'Workshoptage.ch',
 ]
 
 RUNTIME_FILE = os.path.join(os.path.dirname(__file__), 'runtime.txt')
